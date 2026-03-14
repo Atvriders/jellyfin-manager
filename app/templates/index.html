@@ -303,6 +303,10 @@
     try {
       const r = await fetch('/api/scan', { method: 'POST' });
       const d = await r.json();
+      if (r.status === 429) {
+        startCooldown(d.remaining_ms);
+        return;
+      }
       if (d.error) throw new Error(d.error);
 
       statusMsg.textContent = 'Scan started.';

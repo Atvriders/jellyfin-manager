@@ -12,6 +12,7 @@ JELLYFIN_API_KEY = os.environ.get("JELLYFIN_API_KEY", "")
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 
 MAX_ATTEMPTS = 3
+ATTEMPT_WINDOW = 5 * 60     # 5 minutes
 LOCKOUT_SECONDS = 60 * 60   # 1 hour
 COOLDOWN_SECONDS = 60 * 60  # 1 hour
 
@@ -47,11 +48,13 @@ def login():
             session["auth"] = True
             return redirect(url_for("index"))
         else:
-            failed = session.get("failed_attempts", 0) + 1
-            session["failed_attempts"] = failed
-            attempts_left = MAX_ATTEMPTS - failed
+            now = time.time()
+            attempts = [t for t in session.get("failed_attempts", []) if now - t < ATTEMPT_WINDOW]
+            attempts.append(now)
+            session["failed_attempts"] = attempts
+            attempts_left = MAX_ATTEMPTS - len(attempts)
             if attempts_left <= 0:
-                session["locked_until"] = time.time() + LOCKOUT_SECONDS
+                session["locked_until"] = now + LOCKOUT_SECONDS
                 session.pop("failed_attempts", None)
             else:
                 flash(f"Incorrect password. {attempts_left} attempt{'s' if attempts_left != 1 else ''} remaining.")
@@ -110,6 +113,8 @@ def scan():
     global scan_until
     if not authenticated():
         return jsonify({"error": "Unauthorized"}), 401
+    if time.time() < scan_until:
+        return jsonify({"error": "Scan cooldown active", "remaining_ms": int((scan_until - time.time()) * 1000)}), 429
     if not JELLYFIN_URL or not JELLYFIN_API_KEY:
         return jsonify({"error": "JELLYFIN_URL or JELLYFIN_API_KEY not configured"}), 500
     try:
