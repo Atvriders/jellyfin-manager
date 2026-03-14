@@ -71,6 +71,25 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/scan/progress")
+def scan_progress():
+    if not authenticated():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        tasks = requests.get(f"{JELLYFIN_URL}/ScheduledTasks", headers=jf_headers(), timeout=10).json()
+        scan_tasks = [
+            t for t in tasks
+            if any(kw in t.get("Name", "").lower() for kw in ("scan", "refresh", "media", "library"))
+        ]
+        running = next((t for t in scan_tasks if t.get("State") == "Running"), None)
+        if running:
+            pct = running.get("CurrentProgressPercentage") or 0
+            return jsonify({"state": "running", "percent": round(pct, 1), "name": running.get("Name", "")})
+        return jsonify({"state": "idle", "percent": 0})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/scan", methods=["POST"])
 def scan():
     if not authenticated():

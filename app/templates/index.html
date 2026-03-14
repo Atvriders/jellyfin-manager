@@ -153,11 +153,7 @@
     display: inline-block;
   }
 
-  #cat-label {
-    font-size: 0.7rem;
-    color: var(--muted);
-    letter-spacing: 0.06em;
-  }
+
 
   @keyframes spin {
     from { transform: rotate(0deg); }
@@ -181,7 +177,10 @@
   <button id="scan-btn">Scan Media Library</button>
 
   <div id="status-bar-wrap">
-    <div id="status-bar-label">Scanning…</div>
+    <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
+      <div id="status-bar-label">Scanning…</div>
+      <div id="status-bar-pct" style="font-size:0.78rem;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums;"></div>
+    </div>
     <div id="status-bar-track">
       <div id="status-bar-fill"></div>
     </div>
@@ -194,7 +193,6 @@
 
   <div id="spinning-cat">
     <img id="cat-emoji" src="https://images-wixmp-ed30a86b8c4ca887773594c2.wixmp.com/f/ec666739-122f-41a3-8b0a-c01590f5e9a3/djwlgwe-cb474920-1753-4c4a-a4f4-981a7bcc0eff.png/v1/fill/w_1280,h_1280/oiia_cat_assets_by_awesomeconsoles7_djwlgwe-fullview.png?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1cm46YXBwOjdlMGQxODg5ODIyNjQzNzNhNWYwZDQxNWVhMGQyNmUwIiwiaXNzIjoidXJuOmFwcDo3ZTBkMTg4OTgyMjY0MzczYTVmMGQ0MTVlYTBkMjZlMCIsIm9iaiI6W1t7ImhlaWdodCI6Ijw9MTI4MCIsInBhdGgiOiIvZi9lYzY2NjczOS0xMjJmLTQxYTMtOGIwYS1jMDE1OTBmNWU5YTMvZGp3bGd3ZS1jYjQ3NDkyMC0xNzUzLTRjNGEtYTRmNC05ODFhN2JjYzBlZmYucG5nIiwid2lkdGgiOiI8PTEyODAifV1dLCJhdWQiOlsidXJuOnNlcnZpY2U6aW1hZ2Uub3BlcmF0aW9ucyJdfQ.JmDbU4utg9EFz_jHYqDt9XMPoeJNPT62V3k23yB1eXk" alt="OIIA OIIA" />
-    <span id="cat-label">OIIA OIIA</span>
   </div>
 
   <div id="status-msg"></div>
@@ -204,16 +202,18 @@
   const COOLDOWN_MS = 60 * 60 * 1000;
   const STORAGE_KEY = 'jf_scan_until';
 
-  const btn           = document.getElementById('scan-btn');
-  const timerWrap     = document.getElementById('timer-wrap');
-  const timerEl       = document.getElementById('timer');
-  const statusBarWrap = document.getElementById('status-bar-wrap');
-  const statusBarFill = document.getElementById('status-bar-fill');
-  const statusBarLabel = document.getElementById('status-bar-label');
-  const spinningCat   = document.getElementById('spinning-cat');
-  const statusMsg     = document.getElementById('status-msg');
+  const btn             = document.getElementById('scan-btn');
+  const timerWrap       = document.getElementById('timer-wrap');
+  const timerEl         = document.getElementById('timer');
+  const statusBarWrap   = document.getElementById('status-bar-wrap');
+  const statusBarFill   = document.getElementById('status-bar-fill');
+  const statusBarLabel  = document.getElementById('status-bar-label');
+  const statusBarPct    = document.getElementById('status-bar-pct');
+  const spinningCat     = document.getElementById('spinning-cat');
+  const statusMsg       = document.getElementById('status-msg');
 
-  let tickInterval = null;
+  let tickInterval   = null;
+  let pollInterval   = null;
 
   function pad(n) { return String(n).padStart(2, '0'); }
 
@@ -225,15 +225,36 @@
     return `${pad(m)}:${pad(s)}`;
   }
 
-  function showStatusBar(active) {
-    statusBarWrap.style.display = active ? 'flex' : 'none';
-    if (active) {
-      statusBarFill.classList.add('indeterminate');
-      statusBarLabel.textContent = 'Scanning…';
-    } else {
-      statusBarFill.classList.remove('indeterminate');
-      statusBarFill.style.width = '100%';
-    }
+  function setProgressBar(pct, label) {
+    statusBarWrap.style.display = 'flex';
+    statusBarFill.classList.remove('indeterminate');
+    statusBarFill.style.width = pct + '%';
+    statusBarLabel.textContent = label || 'Scanning…';
+    statusBarPct.textContent = pct > 0 ? pct.toFixed(1) + '%' : '';
+  }
+
+  function startProgressPoll() {
+    if (pollInterval) clearInterval(pollInterval);
+    statusBarWrap.style.display = 'flex';
+    statusBarFill.classList.add('indeterminate');
+    statusBarLabel.textContent = 'Scanning…';
+    statusBarPct.textContent = '';
+
+    pollInterval = setInterval(async () => {
+      try {
+        const r = await fetch('/api/scan/progress');
+        const d = await r.json();
+        if (d.state === 'running') {
+          statusBarFill.classList.remove('indeterminate');
+          setProgressBar(d.percent, d.name || 'Scanning…');
+        } else if (d.state === 'idle') {
+          setProgressBar(100, 'Scan complete');
+          statusBarPct.textContent = '100%';
+          clearInterval(pollInterval);
+          setTimeout(() => { statusBarWrap.style.display = 'none'; }, 3000);
+        }
+      } catch (_) {}
+    }, 2000);
   }
 
   function startCooldown(until) {
@@ -241,11 +262,7 @@
     timerWrap.style.display = 'flex';
     spinningCat.style.display = 'flex';
     timerEl.classList.remove('done');
-
-    // Settle status bar to full, then hide after a moment
-    showStatusBar(false);
-    statusBarLabel.textContent = 'Scan started';
-    setTimeout(() => { statusBarWrap.style.display = 'none'; }, 2000);
+    startProgressPoll();
 
     if (tickInterval) clearInterval(tickInterval);
 
@@ -253,10 +270,12 @@
       const remaining = until - Date.now();
       if (remaining <= 0) {
         clearInterval(tickInterval);
+        clearInterval(pollInterval);
         timerEl.textContent = '00:00';
         timerEl.classList.add('done');
         timerWrap.style.display = 'none';
         spinningCat.style.display = 'none';
+        statusBarWrap.style.display = 'none';
         btn.disabled = false;
         statusMsg.textContent = 'Ready to scan.';
         statusMsg.className = '';
@@ -285,7 +304,6 @@
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     statusMsg.textContent = '';
-    showStatusBar(true);
 
     try {
       const r = await fetch('/api/scan', { method: 'POST' });
@@ -297,8 +315,6 @@
       localStorage.setItem(STORAGE_KEY, until);
       startCooldown(until);
     } catch (e) {
-      showStatusBar(false);
-      statusBarWrap.style.display = 'none';
       statusMsg.textContent = 'Error: ' + e.message;
       statusMsg.className = 'error';
       btn.disabled = false;
