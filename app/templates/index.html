@@ -8,18 +8,15 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --bg:        #101010;
-    --surface:   #1c1c1c;
-    --surface2:  #252525;
-    --border:    #2e2e2e;
-    --accent:    #00a4dc;
-    --accent2:   #aa5cc3;
-    --green:     #4caf7d;
-    --red:       #e05260;
-    --orange:    #f5a623;
-    --text:      #e8e8e8;
-    --muted:     #888;
-    --radius:    10px;
+    --bg:      #101010;
+    --surface: #1c1c1c;
+    --border:  #2e2e2e;
+    --accent:  #00a4dc;
+    --green:   #4caf7d;
+    --red:     #e05260;
+    --text:    #e8e8e8;
+    --muted:   #888;
+    --radius:  12px;
   }
 
   body {
@@ -27,511 +24,179 @@
     background: var(--bg);
     color: var(--text);
     min-height: 100vh;
-  }
-
-  header {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 0 2rem;
-    height: 60px;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 1rem;
+    justify-content: center;
+    gap: 2.5rem;
   }
 
-  header svg { flex-shrink: 0; }
-
-  header h1 {
-    font-size: 1.2rem;
+  h1 {
+    font-size: 1.1rem;
     font-weight: 600;
-    letter-spacing: 0.01em;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
-  #status-badge {
-    margin-left: auto;
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 2.5rem 3rem;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 0.5rem;
+    gap: 1.75rem;
+    min-width: 300px;
+  }
+
+  #scan-btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 700;
+    padding: 0.75rem 2rem;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+    width: 100%;
+  }
+  #scan-btn:hover:not(:disabled) { opacity: 0.88; }
+  #scan-btn:active:not(:disabled) { transform: scale(0.97); }
+  #scan-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  #timer-wrap {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  #timer-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  #timer {
+    font-size: 2.8rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+
+  #timer.done { color: var(--green); }
+
+  #status-msg {
     font-size: 0.8rem;
     color: var(--muted);
-    padding: 0.35rem 0.75rem;
-    background: var(--surface2);
-    border-radius: 20px;
-    border: 1px solid var(--border);
-  }
-
-  #status-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--muted);
-    transition: background 0.3s;
-  }
-  #status-dot.online  { background: var(--green); }
-  #status-dot.offline { background: var(--red); }
-
-  main {
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 2rem 1.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 2rem;
-  }
-
-  .section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1rem;
-  }
-
-  .section-title {
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-
-  /* Libraries */
-  #libraries-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 0.75rem;
-  }
-
-  .library-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .library-icon {
-    font-size: 1.5rem;
-  }
-
-  .library-name {
-    font-size: 0.9rem;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .library-type {
-    font-size: 0.72rem;
-    color: var(--muted);
-    text-transform: capitalize;
-  }
-
-  /* Tasks */
-  #tasks-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .task-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1rem 1.25rem;
-  }
-
-  .task-top {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-bottom: 0.6rem;
-  }
-
-  .task-name {
-    font-size: 0.92rem;
-    font-weight: 600;
-    flex: 1;
-  }
-
-  .task-state {
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    padding: 0.2rem 0.6rem;
-    border-radius: 20px;
-    background: var(--surface2);
-    color: var(--muted);
-    border: 1px solid var(--border);
-  }
-  .task-state.running  { color: var(--accent);  border-color: var(--accent); }
-  .task-state.idle     { color: var(--muted);   border-color: var(--border); }
-  .task-state.cancelling { color: var(--orange); border-color: var(--orange); }
-
-  .task-btn {
-    border: none;
-    cursor: pointer;
-    border-radius: 6px;
-    font-size: 0.78rem;
-    font-weight: 600;
-    padding: 0.3rem 0.9rem;
-    transition: opacity 0.15s, transform 0.1s;
-  }
-  .task-btn:active { transform: scale(0.97); }
-  .task-btn.start  { background: var(--accent); color: #fff; }
-  .task-btn.stop   { background: var(--red);   color: #fff; }
-  .task-btn:disabled { opacity: 0.4; cursor: default; }
-
-  /* Progress bar */
-  .progress-wrap {
-    height: 6px;
-    background: var(--surface2);
-    border-radius: 3px;
-    overflow: hidden;
-    margin-top: 0.25rem;
-  }
-
-  .progress-bar {
-    height: 100%;
-    border-radius: 3px;
-    background: linear-gradient(90deg, var(--accent), var(--accent2));
-    transition: width 0.5s ease;
-    width: 0%;
-  }
-
-  .task-meta {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 0.4rem;
-    font-size: 0.72rem;
-    color: var(--muted);
-  }
-
-  /* Buttons */
-  .btn {
-    border: none;
-    cursor: pointer;
-    border-radius: 8px;
-    font-size: 0.82rem;
-    font-weight: 600;
-    padding: 0.45rem 1.1rem;
-    transition: opacity 0.15s, transform 0.1s;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-  .btn:active { transform: scale(0.97); }
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { opacity: 0.88; }
-  .btn:disabled { opacity: 0.4; cursor: default; }
-
-  /* Empty / error states */
-  .empty {
-    color: var(--muted);
-    font-size: 0.85rem;
-    padding: 1.5rem;
+    min-height: 1.2em;
     text-align: center;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
   }
-
-  .error-banner {
-    background: #2a1215;
-    border: 1px solid var(--red);
-    border-radius: var(--radius);
-    padding: 0.85rem 1.25rem;
-    font-size: 0.85rem;
-    color: #f89;
-    display: none;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-  }
-  .pulsing { animation: pulse 1.4s ease-in-out infinite; }
+  #status-msg.error { color: var(--red); }
 </style>
 </head>
 <body>
 
-<header>
-  <!-- Jellyfin-style play icon -->
-  <svg width="30" height="30" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="15" cy="15" r="15" fill="#00a4dc"/>
-    <polygon points="12,9 22,15 12,21" fill="white"/>
-  </svg>
-  <h1>Jellyfin Manager</h1>
-  <div id="status-badge">
-    <div id="status-dot"></div>
-    <span id="status-text">Connecting…</span>
+<h1>Jellyfin Manager</h1>
+
+<div class="card">
+  <button id="scan-btn">Scan Media Library</button>
+
+  <div id="timer-wrap">
+    <div id="timer-label">Next scan available in</div>
+    <div id="timer">1:00:00</div>
   </div>
-</header>
 
-<main>
-  <div id="error-banner" class="error-banner"></div>
-
-  <!-- Libraries -->
-  <section>
-    <div class="section-header">
-      <span class="section-title">Libraries</span>
-      <button class="btn btn-primary" id="scan-all-btn" disabled>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/>
-          <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
-        </svg>
-        Scan All Libraries
-      </button>
-    </div>
-    <div id="libraries-grid"><div class="empty pulsing">Loading libraries…</div></div>
-  </section>
-
-  <!-- Scan Tasks -->
-  <section>
-    <div class="section-header">
-      <span class="section-title">Scan Tasks</span>
-    </div>
-    <div id="tasks-list"><div class="empty pulsing">Loading tasks…</div></div>
-  </section>
-</main>
+  <div id="status-msg"></div>
+</div>
 
 <script>
-  const statusDot  = document.getElementById('status-dot');
-  const statusText = document.getElementById('status-text');
-  const errorBanner = document.getElementById('error-banner');
-  const scanAllBtn = document.getElementById('scan-all-btn');
-  const librariesGrid = document.getElementById('libraries-grid');
-  const tasksList = document.getElementById('tasks-list');
+  const COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+  const STORAGE_KEY = 'jf_scan_until';
 
-  // Track rendered tasks so we update in-place
-  const taskCards = {};
+  const btn       = document.getElementById('scan-btn');
+  const timerWrap = document.getElementById('timer-wrap');
+  const timerEl   = document.getElementById('timer');
+  const statusMsg = document.getElementById('status-msg');
 
-  const LIBRARY_ICONS = {
-    movies: '🎬', tvshows: '📺', music: '🎵', books: '📚',
-    photos: '🖼️', homevideos: '🏠', musicvideos: '🎤', mixed: '📁',
-  };
+  let tickInterval = null;
 
-  function showError(msg) {
-    errorBanner.style.display = 'block';
-    errorBanner.textContent = '⚠ ' + msg;
+  function pad(n) { return String(n).padStart(2, '0'); }
+
+  function formatMs(ms) {
+    if (ms <= 0) return '0:00:00';
+    const totalSec = Math.ceil(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    return `${h}:${pad(m)}:${pad(s)}`;
   }
 
-  function clearError() {
-    errorBanner.style.display = 'none';
-  }
+  function startCooldown(until) {
+    btn.disabled = true;
+    timerWrap.style.display = 'flex';
+    timerEl.classList.remove('done');
 
-  // ── Connection status ──────────────────────────────────────────────────────
-  async function checkStatus() {
-    try {
-      const r = await fetch('/api/status');
-      const d = await r.json();
-      if (d.error) throw new Error(d.error);
-      statusDot.className = 'online';
-      statusText.textContent = d.server_name + (d.version ? ' v' + d.version : '');
-      clearError();
-      return true;
-    } catch (e) {
-      statusDot.className = 'offline';
-      statusText.textContent = 'Offline';
-      showError('Cannot reach Jellyfin: ' + e.message);
-      return false;
-    }
-  }
+    if (tickInterval) clearInterval(tickInterval);
 
-  // ── Libraries ──────────────────────────────────────────────────────────────
-  async function loadLibraries() {
-    try {
-      const r = await fetch('/api/libraries');
-      const libs = await r.json();
-      if (libs.error) throw new Error(libs.error);
-      if (!libs.length) {
-        librariesGrid.innerHTML = '<div class="empty">No libraries found.</div>';
-        return;
+    tickInterval = setInterval(() => {
+      const remaining = until - Date.now();
+      if (remaining <= 0) {
+        clearInterval(tickInterval);
+        timerEl.textContent = '0:00:00';
+        timerEl.classList.add('done');
+        timerWrap.style.display = 'none';
+        btn.disabled = false;
+        statusMsg.textContent = 'Ready to scan.';
+        statusMsg.className = '';
+        localStorage.removeItem(STORAGE_KEY);
+      } else {
+        timerEl.textContent = formatMs(remaining);
       }
-      librariesGrid.innerHTML = libs.map(lib => {
-        const typeKey = (lib.CollectionType || 'mixed').toLowerCase();
-        const icon = LIBRARY_ICONS[typeKey] || '📁';
-        return `<div class="library-card">
-          <div class="library-icon">${icon}</div>
-          <div class="library-name" title="${lib.Name}">${lib.Name}</div>
-          <div class="library-type">${typeKey}</div>
-        </div>`;
-      }).join('');
-      scanAllBtn.disabled = false;
-    } catch (e) {
-      librariesGrid.innerHTML = `<div class="empty">Failed to load libraries: ${e.message}</div>`;
+    }, 500);
+  }
+
+  // Resume timer on page load if cooldown is active
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) {
+    const until = parseInt(saved, 10);
+    if (Date.now() < until) {
+      timerEl.textContent = formatMs(until - Date.now());
+      startCooldown(until);
+    } else {
+      localStorage.removeItem(STORAGE_KEY);
     }
   }
 
-  // ── Scan all ───────────────────────────────────────────────────────────────
-  scanAllBtn.addEventListener('click', async () => {
-    scanAllBtn.disabled = true;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    statusMsg.textContent = 'Starting scan…';
+    statusMsg.className = '';
+
     try {
-      const r = await fetch('/api/scan/all', { method: 'POST' });
+      const r = await fetch('/api/scan', { method: 'POST' });
       const d = await r.json();
       if (d.error) throw new Error(d.error);
+
+      statusMsg.textContent = 'Scan started.';
+      const until = Date.now() + COOLDOWN_MS;
+      localStorage.setItem(STORAGE_KEY, until);
+      startCooldown(until);
     } catch (e) {
-      showError('Scan failed: ' + e.message);
-      scanAllBtn.disabled = false;
+      statusMsg.textContent = 'Error: ' + e.message;
+      statusMsg.className = 'error';
+      btn.disabled = false;
     }
-    // Re-enable after a moment (tasks will update via SSE)
-    setTimeout(() => { scanAllBtn.disabled = false; }, 3000);
   });
-
-  // ── Task helpers ───────────────────────────────────────────────────────────
-  function stateClass(state) {
-    if (!state) return 'idle';
-    return state.toLowerCase();
-  }
-
-  function formatLastRun(task) {
-    const lr = task.LastExecutionResult;
-    if (!lr) return 'Never run';
-    const status = lr.Status || '';
-    const end = lr.EndTimeUtc ? new Date(lr.EndTimeUtc).toLocaleString() : '';
-    return end ? `Last: ${end} — ${status}` : status;
-  }
-
-  function renderTask(task) {
-    const state = task.State || 'Idle';
-    const isRunning = state === 'Running';
-    const isCancelling = state === 'Cancelling';
-    const pct = isRunning ? (task.CurrentProgressPercentage || 0) : (isCancelling ? 100 : 0);
-    const sc = stateClass(state);
-
-    const card = document.createElement('div');
-    card.className = 'task-card';
-    card.dataset.taskId = task.Id;
-    card.innerHTML = `
-      <div class="task-top">
-        <div class="task-name">${task.Name}</div>
-        <div class="task-state ${sc}">${state}</div>
-        ${isRunning || isCancelling
-          ? `<button class="task-btn stop" onclick="stopTask('${task.Id}', this)">Stop</button>`
-          : `<button class="task-btn start" onclick="startTask('${task.Id}', this)">Run</button>`
-        }
-      </div>
-      <div class="progress-wrap">
-        <div class="progress-bar" style="width:${pct}%"></div>
-      </div>
-      <div class="task-meta">
-        <span>${task.Description || ''}</span>
-        <span id="task-pct-${task.Id}">${isRunning ? pct.toFixed(1) + '%' : formatLastRun(task)}</span>
-      </div>
-    `;
-    return card;
-  }
-
-  function updateTaskCard(card, task) {
-    const state = task.State || 'Idle';
-    const isRunning = state === 'Running';
-    const isCancelling = state === 'Cancelling';
-    const pct = isRunning ? (task.CurrentProgressPercentage || 0) : (isCancelling ? 100 : 0);
-    const sc = stateClass(state);
-
-    const stateEl = card.querySelector('.task-state');
-    if (stateEl) { stateEl.textContent = state; stateEl.className = `task-state ${sc}`; }
-
-    const bar = card.querySelector('.progress-bar');
-    if (bar) bar.style.width = pct + '%';
-
-    const pctEl = card.querySelector(`#task-pct-${task.Id}`);
-    if (pctEl) pctEl.textContent = isRunning ? pct.toFixed(1) + '%' : formatLastRun(task);
-
-    // Swap button if state changed
-    const btnWrap = card.querySelector('.task-top');
-    if (btnWrap) {
-      const existingBtn = btnWrap.querySelector('.task-btn');
-      if (existingBtn) {
-        const wasRunning = existingBtn.classList.contains('stop');
-        if (isRunning !== wasRunning) {
-          existingBtn.outerHTML = isRunning || isCancelling
-            ? `<button class="task-btn stop" onclick="stopTask('${task.Id}', this)">Stop</button>`
-            : `<button class="task-btn start" onclick="startTask('${task.Id}', this)">Run</button>`;
-        }
-      }
-    }
-  }
-
-  // ── Task actions ───────────────────────────────────────────────────────────
-  async function startTask(id, btn) {
-    btn.disabled = true;
-    btn.textContent = '…';
-    try {
-      const r = await fetch(`/api/scan/task/${id}`, { method: 'POST' });
-      const d = await r.json();
-      if (d.error) throw new Error(d.error);
-    } catch (e) {
-      showError('Could not start task: ' + e.message);
-      btn.disabled = false;
-      btn.textContent = 'Run';
-    }
-  }
-
-  async function stopTask(id, btn) {
-    btn.disabled = true;
-    btn.textContent = '…';
-    try {
-      const r = await fetch(`/api/scan/task/${id}/stop`, { method: 'POST' });
-      const d = await r.json();
-      if (d.error) throw new Error(d.error);
-    } catch (e) {
-      showError('Could not stop task: ' + e.message);
-      btn.disabled = false;
-      btn.textContent = 'Stop';
-    }
-  }
-
-  // ── SSE progress stream ────────────────────────────────────────────────────
-  function startProgressStream() {
-    const es = new EventSource('/api/progress');
-
-    es.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.error) { showError(data.error); return; }
-
-      const tasks = data.tasks || [];
-
-      if (!tasks.length) {
-        tasksList.innerHTML = '<div class="empty">No scan tasks found.</div>';
-        return;
-      }
-
-      tasks.forEach(task => {
-        if (taskCards[task.Id]) {
-          updateTaskCard(taskCards[task.Id], task);
-        } else {
-          const card = renderTask(task);
-          taskCards[task.Id] = card;
-          if (tasksList.querySelector('.empty')) tasksList.innerHTML = '';
-          tasksList.appendChild(card);
-        }
-      });
-    };
-
-    es.onerror = () => {
-      statusDot.className = 'offline';
-      statusText.textContent = 'Disconnected';
-      setTimeout(() => {
-        checkStatus();
-        startProgressStream();
-      }, 5000);
-      es.close();
-    };
-  }
-
-  // ── Init ───────────────────────────────────────────────────────────────────
-  (async () => {
-    const ok = await checkStatus();
-    if (ok) {
-      loadLibraries();
-    }
-    startProgressStream();
-    // Periodically re-check connection
-    setInterval(checkStatus, 30000);
-  })();
 </script>
 </body>
 </html>
