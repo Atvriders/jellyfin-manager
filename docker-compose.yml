@@ -6,4 +6,6 @@ services:
     environment:
       - JELLYFIN_URL=http://192.168.1.100:8096
       - JELLYFIN_API_KEY=your_api_key_here
+      - APP_PASSWORD=changeme
+      - SECRET_KEY=change_this_to_a_random_string
     restart: unless-stopped
