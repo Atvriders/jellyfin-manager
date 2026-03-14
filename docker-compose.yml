@@ -4,6 +4,6 @@ services:
     ports:
       - "5455:5000"
     environment:
-      - JELLYFIN_URL=${JELLYFIN_URL}
-      - JELLYFIN_API_KEY=${JELLYFIN_API_KEY}
+      - JELLYFIN_URL=http://192.168.1.100:8096
+      - JELLYFIN_API_KEY=your_api_key_here
     restart: unless-stopped
