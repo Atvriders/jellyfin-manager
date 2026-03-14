@@ -13,6 +13,7 @@ APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 
 MAX_ATTEMPTS = 3
 LOCKOUT_SECONDS = 60 * 60  # 1 hour
+SESSION_TIMEOUT = 10 * 60  # 10 minutes
 
 
 def jf_headers():
@@ -20,7 +21,12 @@ def jf_headers():
 
 
 def authenticated():
-    return session.get("auth") is True
+    if not session.get("auth"):
+        return False
+    if time.time() - session.get("login_time", 0) > SESSION_TIMEOUT:
+        session.clear()
+        return False
+    return True
 
 
 def lockout_remaining():
@@ -44,6 +50,7 @@ def login():
             session.pop("failed_attempts", None)
             session.pop("locked_until", None)
             session["auth"] = True
+            session["login_time"] = time.time()
             return redirect(url_for("index"))
         else:
             failed = session.get("failed_attempts", 0) + 1
