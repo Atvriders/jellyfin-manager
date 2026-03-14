@@ -1,6 +1,6 @@
 services:
   jellyfin-manager:
-    build: ./app
+    image: ghcr.io/atvriders/jellyfin-manager:latest
     ports:
       - "5455:5000"
     environment:

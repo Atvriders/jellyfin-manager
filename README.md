@@ -34,7 +34,12 @@ A lightweight web UI for managing your Jellyfin media server — view libraries,
    ```
    > Get your API key from Jellyfin: **Dashboard → Advanced → API Keys → + New Key**
 
-3. **Start the app**
+3. **Pull the image**
+   ```bash
+   docker pull ghcr.io/atvriders/jellyfin-manager:latest
+   ```
+
+4. **Start the app**
    ```bash
    docker compose up -d
    ```
