@@ -12,7 +12,11 @@ JELLYFIN_API_KEY = os.environ.get("JELLYFIN_API_KEY", "")
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 
 MAX_ATTEMPTS = 3
-LOCKOUT_SECONDS = 60 * 60  # 1 hour
+LOCKOUT_SECONDS = 60 * 60   # 1 hour
+COOLDOWN_SECONDS = 60 * 60  # 1 hour
+
+# Server-side shared scan state
+scan_until = 0  # epoch seconds when cooldown expires
 
 
 def jf_headers():
@@ -74,6 +78,14 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/scan/state")
+def scan_state():
+    if not authenticated():
+        return jsonify({"error": "Unauthorized"}), 401
+    remaining = max(0, scan_until - time.time())
+    return jsonify({"active": remaining > 0, "remaining_ms": int(remaining * 1000)})
+
+
 @app.route("/api/scan/progress")
 def scan_progress():
     if not authenticated():
@@ -95,6 +107,7 @@ def scan_progress():
 
 @app.route("/api/scan", methods=["POST"])
 def scan():
+    global scan_until
     if not authenticated():
         return jsonify({"error": "Unauthorized"}), 401
     if not JELLYFIN_URL or not JELLYFIN_API_KEY:
@@ -102,6 +115,7 @@ def scan():
     try:
         r = requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers=jf_headers(), timeout=10)
         r.raise_for_status()
+        scan_until = time.time() + COOLDOWN_SECONDS
         return jsonify({"status": "started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

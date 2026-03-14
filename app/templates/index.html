@@ -199,9 +199,6 @@
 </div>
 
 <script>
-  const COOLDOWN_MS = 60 * 60 * 1000;
-  const STORAGE_KEY = 'jf_scan_until';
-
   const btn             = document.getElementById('scan-btn');
   const timerWrap       = document.getElementById('timer-wrap');
   const timerEl         = document.getElementById('timer');
@@ -212,8 +209,8 @@
   const spinningCat     = document.getElementById('spinning-cat');
   const statusMsg       = document.getElementById('status-msg');
 
-  let tickInterval   = null;
-  let pollInterval   = null;
+  let tickInterval = null;
+  let pollInterval = null;
 
   function pad(n) { return String(n).padStart(2, '0'); }
 
@@ -257,7 +254,8 @@
     }, 2000);
   }
 
-  function startCooldown(until) {
+  function startCooldown(remainingMs) {
+    const until = Date.now() + remainingMs;
     btn.disabled = true;
     timerWrap.style.display = 'flex';
     spinningCat.style.display = 'flex';
@@ -267,11 +265,10 @@
     if (tickInterval) clearInterval(tickInterval);
 
     tickInterval = setInterval(() => {
-      const remaining = until - Date.now();
-      if (remaining <= 0) {
+      const left = until - Date.now();
+      if (left <= 0) {
         clearInterval(tickInterval);
         clearInterval(pollInterval);
-        timerEl.textContent = '00:00';
         timerEl.classList.add('done');
         timerWrap.style.display = 'none';
         spinningCat.style.display = 'none';
@@ -279,27 +276,25 @@
         btn.disabled = false;
         statusMsg.textContent = 'Ready to scan.';
         statusMsg.className = '';
-        localStorage.removeItem(STORAGE_KEY);
       } else {
-        timerEl.textContent = formatMs(remaining);
+        timerEl.textContent = formatMs(left);
       }
     }, 500);
   }
 
-  // Resume on page load
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    const until = parseInt(saved, 10);
-    if (Date.now() < until) {
-      timerEl.textContent = formatMs(until - Date.now());
-      timerWrap.style.display = 'flex';
-      spinningCat.style.display = 'flex';
-      btn.disabled = true;
-      startCooldown(until);
-    } else {
-      localStorage.removeItem(STORAGE_KEY);
-    }
+  // Sync state from server on load
+  async function syncState() {
+    try {
+      const r = await fetch('/api/scan/state');
+      const d = await r.json();
+      if (d.active && d.remaining_ms > 0) {
+        timerEl.textContent = formatMs(d.remaining_ms);
+        startCooldown(d.remaining_ms);
+      }
+    } catch (_) {}
   }
+
+  syncState();
 
   btn.addEventListener('click', async () => {
     btn.disabled = true;
@@ -311,9 +306,7 @@
       if (d.error) throw new Error(d.error);
 
       statusMsg.textContent = 'Scan started.';
-      const until = Date.now() + COOLDOWN_MS;
-      localStorage.setItem(STORAGE_KEY, until);
-      startCooldown(until);
+      startCooldown(60 * 60 * 1000);
     } catch (e) {
       statusMsg.textContent = 'Error: ' + e.message;
       statusMsg.className = 'error';
