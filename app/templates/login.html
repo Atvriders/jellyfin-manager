@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Scan Media Library — Login</title>
+<title>Jellyfin Scan Media Library — Login</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -116,7 +116,7 @@
 </head>
 <body>
 
-<h1>Scan Media Library</h1>
+<h1>Jellyfin Scan Media Library</h1>
 
 <div class="card">
   {% if locked %}
@@ -131,10 +131,9 @@
 
     function pad(n) { return String(n).padStart(2, '0'); }
     function fmt(s) {
-      const h = Math.floor(s / 3600);
-      const m = Math.floor((s % 3600) / 60);
+      const m = Math.floor(s / 60);
       const sec = s % 60;
-      return `${h}:${pad(m)}:${pad(sec)}`;
+      return `${pad(m)}:${pad(sec)}`;
     }
 
     timerEl.textContent = fmt(remaining);

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Scan Media Library</title>
+<title>Jellyfin Scan Media Library</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -48,7 +48,7 @@
     flex-direction: column;
     align-items: center;
     gap: 1.75rem;
-    min-width: 300px;
+    min-width: 320px;
   }
 
   #scan-btn {
@@ -65,11 +65,52 @@
   }
   #scan-btn:hover:not(:disabled) { opacity: 0.88; }
   #scan-btn:active:not(:disabled) { transform: scale(0.97); }
-  #scan-btn:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
+  #scan-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  /* Status bar */
+  #status-bar-wrap {
+    width: 100%;
+    display: none;
+    flex-direction: column;
+    gap: 0.4rem;
   }
 
+  #status-bar-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  #status-bar-track {
+    width: 100%;
+    height: 6px;
+    background: #2a2a2a;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  #status-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent), #aa5cc3);
+    width: 0%;
+    transition: width 0.4s ease;
+  }
+
+  #status-bar-fill.indeterminate {
+    width: 40%;
+    animation: slide 1.4s ease-in-out infinite;
+  }
+
+  @keyframes slide {
+    0%   { margin-left: -40%; }
+    100% { margin-left: 100%; }
+  }
+
+  /* Timer */
   #timer-wrap {
     display: none;
     flex-direction: column;
@@ -95,6 +136,31 @@
 
   #timer.done { color: var(--green); }
 
+  /* Spinning cat */
+  #spinning-cat {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  #cat-emoji {
+    font-size: 2.5rem;
+    animation: spin 0.6s linear infinite;
+    display: inline-block;
+  }
+
+  #cat-label {
+    font-size: 0.7rem;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
   #status-msg {
     font-size: 0.8rem;
     color: var(--muted);
@@ -106,45 +172,77 @@
 </head>
 <body>
 
-<h1>Scan Media Library</h1>
+<h1>Jellyfin Scan Media Library</h1>
 
 <div class="card">
   <button id="scan-btn">Scan Media Library</button>
 
+  <div id="status-bar-wrap">
+    <div id="status-bar-label">Scanning…</div>
+    <div id="status-bar-track">
+      <div id="status-bar-fill"></div>
+    </div>
+  </div>
+
   <div id="timer-wrap">
     <div id="timer-label">Next scan available in</div>
-    <div id="timer">1:00:00</div>
+    <div id="timer">60:00</div>
+  </div>
+
+  <div id="spinning-cat">
+    <span id="cat-emoji">🐱</span>
+    <span id="cat-label">OIIA OIIA</span>
   </div>
 
   <div id="status-msg"></div>
 </div>
 
 <script>
-  const COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+  const COOLDOWN_MS = 60 * 60 * 1000;
   const STORAGE_KEY = 'jf_scan_until';
 
-  const btn       = document.getElementById('scan-btn');
-  const timerWrap = document.getElementById('timer-wrap');
-  const timerEl   = document.getElementById('timer');
-  const statusMsg = document.getElementById('status-msg');
+  const btn           = document.getElementById('scan-btn');
+  const timerWrap     = document.getElementById('timer-wrap');
+  const timerEl       = document.getElementById('timer');
+  const statusBarWrap = document.getElementById('status-bar-wrap');
+  const statusBarFill = document.getElementById('status-bar-fill');
+  const statusBarLabel = document.getElementById('status-bar-label');
+  const spinningCat   = document.getElementById('spinning-cat');
+  const statusMsg     = document.getElementById('status-msg');
 
   let tickInterval = null;
 
   function pad(n) { return String(n).padStart(2, '0'); }
 
   function formatMs(ms) {
-    if (ms <= 0) return '0:00:00';
+    if (ms <= 0) return '00:00';
     const totalSec = Math.ceil(ms / 1000);
-    const h = Math.floor(totalSec / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
+    const m = Math.floor(totalSec / 60);
     const s = totalSec % 60;
-    return `${h}:${pad(m)}:${pad(s)}`;
+    return `${pad(m)}:${pad(s)}`;
+  }
+
+  function showStatusBar(active) {
+    statusBarWrap.style.display = active ? 'flex' : 'none';
+    if (active) {
+      statusBarFill.classList.add('indeterminate');
+      statusBarLabel.textContent = 'Scanning…';
+    } else {
+      statusBarFill.classList.remove('indeterminate');
+      statusBarFill.style.width = '100%';
+    }
   }
 
   function startCooldown(until) {
     btn.disabled = true;
     timerWrap.style.display = 'flex';
+    spinningCat.style.display = 'flex';
     timerEl.classList.remove('done');
+
+    // Settle status bar to full, then hide after a moment
+    showStatusBar(false);
+    statusBarLabel.textContent = 'Scan started';
+    setTimeout(() => { statusBarWrap.style.display = 'none'; }, 2000);
 
     if (tickInterval) clearInterval(tickInterval);
 
@@ -152,9 +250,10 @@
       const remaining = until - Date.now();
       if (remaining <= 0) {
         clearInterval(tickInterval);
-        timerEl.textContent = '0:00:00';
+        timerEl.textContent = '00:00';
         timerEl.classList.add('done');
         timerWrap.style.display = 'none';
+        spinningCat.style.display = 'none';
         btn.disabled = false;
         statusMsg.textContent = 'Ready to scan.';
         statusMsg.className = '';
@@ -165,12 +264,15 @@
     }, 500);
   }
 
-  // Resume timer on page load if cooldown is active
+  // Resume on page load
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved) {
     const until = parseInt(saved, 10);
     if (Date.now() < until) {
       timerEl.textContent = formatMs(until - Date.now());
+      timerWrap.style.display = 'flex';
+      spinningCat.style.display = 'flex';
+      btn.disabled = true;
       startCooldown(until);
     } else {
       localStorage.removeItem(STORAGE_KEY);
@@ -179,8 +281,8 @@
 
   btn.addEventListener('click', async () => {
     btn.disabled = true;
-    statusMsg.textContent = 'Starting scan…';
-    statusMsg.className = '';
+    statusMsg.textContent = '';
+    showStatusBar(true);
 
     try {
       const r = await fetch('/api/scan', { method: 'POST' });
@@ -192,6 +294,8 @@
       localStorage.setItem(STORAGE_KEY, until);
       startCooldown(until);
     } catch (e) {
+      showStatusBar(false);
+      statusBarWrap.style.display = 'none';
       statusMsg.textContent = 'Error: ' + e.message;
       statusMsg.className = 'error';
       btn.disabled = false;
