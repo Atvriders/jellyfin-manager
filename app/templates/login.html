@@ -112,6 +112,21 @@
     color: var(--muted);
     text-align: center;
   }
+
+  @keyframes shake {
+    0%   { transform: translateX(0); }
+    15%  { transform: translateX(-8px); }
+    30%  { transform: translateX(8px); }
+    45%  { transform: translateX(-6px); }
+    60%  { transform: translateX(6px); }
+    75%  { transform: translateX(-3px); }
+    90%  { transform: translateX(3px); }
+    100% { transform: translateX(0); }
+  }
+
+  .shake {
+    animation: shake 0.5s ease;
+  }
 </style>
 </head>
 <body>
@@ -155,6 +170,11 @@
       <button type="submit">Enter</button>
       {% if error %}
       <div class="error">{{ error }}</div>
+      <script>
+        const card = document.querySelector('.card');
+        card.classList.add('shake');
+        card.addEventListener('animationend', () => card.classList.remove('shake'), { once: true });
+      </script>
       {% endif %}
     </div>
   </form>
