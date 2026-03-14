@@ -25,13 +25,12 @@ A lightweight web UI for managing your Jellyfin media server — view libraries,
    ```
 
 2. **Configure environment**
-   ```bash
-   cp .env.example .env
-   ```
-   Edit `.env` and set your values:
-   ```env
-   JELLYFIN_URL=http://192.168.1.100:8096
-   JELLYFIN_API_KEY=your_api_key_here
+
+   Edit `docker-compose.yml` and set your values:
+   ```yaml
+   environment:
+     - JELLYFIN_URL=http://192.168.1.100:8096
+     - JELLYFIN_API_KEY=your_api_key_here
    ```
    > Get your API key from Jellyfin: **Dashboard → Advanced → API Keys → + New Key**
 
