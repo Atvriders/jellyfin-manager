@@ -2,7 +2,7 @@ import os
 import time
 
 import requests
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, flash, get_flashed_messages, jsonify, redirect, render_template, request, session, url_for
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
@@ -32,14 +32,11 @@ def lockout_remaining():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    remaining = lockout_remaining()
-    if remaining:
-        return render_template("login.html", locked=True, locked_seconds=remaining)
-
-    error = None
-    attempts_left = MAX_ATTEMPTS - session.get("failed_attempts", 0)
-
     if request.method == "POST":
+        remaining = lockout_remaining()
+        if remaining:
+            return redirect(url_for("login"))
+
         if request.form.get("password") == APP_PASSWORD:
             session.pop("failed_attempts", None)
             session.pop("locked_until", None)
@@ -52,10 +49,16 @@ def login():
             if attempts_left <= 0:
                 session["locked_until"] = time.time() + LOCKOUT_SECONDS
                 session.pop("failed_attempts", None)
-                return render_template("login.html", locked=True, locked_seconds=LOCKOUT_SECONDS)
-            error = f"Incorrect password. {attempts_left} attempt{'s' if attempts_left != 1 else ''} remaining."
+            else:
+                flash(f"Incorrect password. {attempts_left} attempt{'s' if attempts_left != 1 else ''} remaining.")
+            return redirect(url_for("login"))
 
-    return render_template("login.html", locked=False, error=error)
+    remaining = lockout_remaining()
+    if remaining:
+        return render_template("login.html", locked=True, locked_seconds=remaining)
+
+    error = get_flashed_messages()
+    return render_template("login.html", locked=False, error=error[0] if error else None)
 
 
 @app.route("/logout")
