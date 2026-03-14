@@ -1,4 +1,5 @@
 import os
+import time
 
 import requests
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
@@ -10,6 +11,9 @@ JELLYFIN_URL = os.environ.get("JELLYFIN_URL", "").rstrip("/")
 JELLYFIN_API_KEY = os.environ.get("JELLYFIN_API_KEY", "")
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 
+MAX_ATTEMPTS = 3
+LOCKOUT_SECONDS = 60 * 60  # 1 hour
+
 
 def jf_headers():
     return {"X-Emby-Token": JELLYFIN_API_KEY, "Accept": "application/json"}
@@ -19,15 +23,39 @@ def authenticated():
     return session.get("auth") is True
 
 
+def lockout_remaining():
+    locked_until = session.get("locked_until")
+    if locked_until and time.time() < locked_until:
+        return int(locked_until - time.time())
+    return 0
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    remaining = lockout_remaining()
+    if remaining:
+        return render_template("login.html", locked=True, locked_seconds=remaining)
+
     error = None
+    attempts_left = MAX_ATTEMPTS - session.get("failed_attempts", 0)
+
     if request.method == "POST":
         if request.form.get("password") == APP_PASSWORD:
+            session.pop("failed_attempts", None)
+            session.pop("locked_until", None)
             session["auth"] = True
             return redirect(url_for("index"))
-        error = "Incorrect password."
-    return render_template("login.html", error=error)
+        else:
+            failed = session.get("failed_attempts", 0) + 1
+            session["failed_attempts"] = failed
+            attempts_left = MAX_ATTEMPTS - failed
+            if attempts_left <= 0:
+                session["locked_until"] = time.time() + LOCKOUT_SECONDS
+                session.pop("failed_attempts", None)
+                return render_template("login.html", locked=True, locked_seconds=LOCKOUT_SECONDS)
+            error = f"Incorrect password. {attempts_left} attempt{'s' if attempts_left != 1 else ''} remaining."
+
+    return render_template("login.html", locked=False, error=error)
 
 
 @app.route("/logout")
