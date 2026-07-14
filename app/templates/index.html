@@ -504,6 +504,20 @@
     min-width: 0;
   }
 
+  .history-user {
+    font-family: var(--font-mono);
+    color: #A9BEDC;   /* a step brighter than benthos: the human reads first */
+    white-space: nowrap;
+    /* Usernames are attacker-influenced width (up to 64 chars): shrink and
+       ellipsize like .history-ua, capped so ip · browser always keep room. */
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 18ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: help;
+  }
+
   .history-ip {
     font-family: var(--font-mono);
     color: var(--benthos);
@@ -1525,8 +1539,9 @@
   syncState();
 
   /* ---------------- Dive log ----------------
-     SECURITY: every value below (ip, user_agent, error) is client-controlled.
-     Rows are built with createElement + textContent ONLY. Never innerHTML. */
+     SECURITY: every value below (user, ip, user_agent, error) is
+     attacker-influenced (user is a Jellyfin account name). Rows are built
+     with createElement + textContent ONLY. Never innerHTML. */
 
   const historyList  = document.getElementById('history-list');
   const historyEmpty = document.getElementById('history-empty');
@@ -1626,6 +1641,14 @@
     row.appendChild(badge);
 
     const meta = el('div', 'history-meta');
+    // Meta order: user · ip · browser. Old rows have no "user" — omit the
+    // span and its separator entirely so they render exactly as before.
+    if (entry.user) {
+      const userEl = el('span', 'history-user', String(entry.user));
+      userEl.title = String(entry.user);   // property assignment, not markup
+      meta.appendChild(userEl);
+      meta.appendChild(el('span', 'history-sep', '·'));
+    }
     const ip = entry.ip ? String(entry.ip) : 'unknown IP';
     meta.appendChild(el('span', 'history-ip', ip));
     meta.appendChild(el('span', 'history-sep', '·'));

@@ -12,7 +12,13 @@ app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
 
 JELLYFIN_URL = os.environ.get("JELLYFIN_URL", "").rstrip("/")
 JELLYFIN_API_KEY = os.environ.get("JELLYFIN_API_KEY", "")
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+
+# Identifies this app to Jellyfin when authenticating a user. Required by the
+# AuthenticateByName endpoint, which rejects anonymous clients.
+MEDIABROWSER_AUTH_HEADER = (
+    'MediaBrowser Client="Jellyfin Manager", Device="jellyfin-manager", '
+    'DeviceId="jellyfin-manager", Version="2.0.0"'
+)
 
 MAX_ATTEMPTS = 3
 ATTEMPT_WINDOW = 5 * 60     # 5 minutes
@@ -47,6 +53,62 @@ def jf_headers():
     return {"X-Emby-Token": JELLYFIN_API_KEY, "Accept": "application/json"}
 
 
+class JellyfinUnreachable(Exception):
+    """Jellyfin could not be reached (or answered with a non-auth failure)."""
+
+
+def authenticate_jellyfin(username: str, password: str) -> "dict | None":
+    """Verify a Jellyfin user's credentials against the Jellyfin server.
+
+    Returns the response's "User" dict (e.g. {"Name": ..., "Id": ...}) on
+    success, None on a genuine credential rejection (401/400), and raises
+    JellyfinUnreachable for anything that is NOT a verdict on the credentials
+    (connection error, timeout, 5xx, unparseable body) — the caller must not
+    count those as failed attempts.
+
+    The password travels ONLY in the request body, and is never logged or
+    stored. Jellyfin creates a session for us on success; we immediately
+    best-effort revoke it (we only wanted the yes/no, never the token).
+    """
+    try:
+        resp = requests.post(
+            f"{JELLYFIN_URL}/Users/AuthenticateByName",
+            json={"Username": username, "Pw": password},
+            headers={"Authorization": MEDIABROWSER_AUTH_HEADER},
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        raise JellyfinUnreachable("could not reach Jellyfin") from exc
+
+    if resp.status_code in (400, 401):
+        return None  # a real verdict: bad credentials
+    if resp.status_code != 200:
+        raise JellyfinUnreachable(f"Jellyfin returned HTTP {resp.status_code}")
+
+    try:
+        body = resp.json()
+        user = body.get("User")
+    except Exception as exc:
+        raise JellyfinUnreachable("Jellyfin returned an unparseable response") from exc
+    if not isinstance(user, dict):
+        raise JellyfinUnreachable("Jellyfin response had no User object")
+
+    # Best-effort revoke of the session Jellyfin just created — we never keep
+    # (or log) that token, and a failure here must not break the login.
+    token = body.get("AccessToken")
+    if token:
+        try:
+            requests.post(
+                f"{JELLYFIN_URL}/Sessions/Logout",
+                headers={"X-Emby-Token": token},
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+    return user
+
+
 def authenticated():
     return session.get("auth") is True
 
@@ -70,7 +132,7 @@ def client_ip():
     return request.remote_addr or ""
 
 
-def record_press(outcome, error=""):
+def record_press(outcome, error="", user=""):
     """Record a button press. Never lets a history problem break the button."""
     try:
         return history.record(
@@ -78,6 +140,7 @@ def record_press(outcome, error=""):
             ip=client_ip(),
             user_agent=request.headers.get("User-Agent", ""),
             error=error,
+            user=user,
         )
     except Exception:  # e.g. read-only /data — log it, but still serve the user
         app.logger.exception("failed to record scan history entry")
@@ -134,23 +197,44 @@ def login():
         if remaining:
             return redirect(url_for("login"))
 
-        if request.form.get("password") == APP_PASSWORD:
-            session.pop("failed_attempts", None)
-            session.pop("locked_until", None)
-            session["auth"] = True
-            return redirect(url_for("index"))
-        else:
-            now = time.time()
-            attempts = [t for t in session.get("failed_attempts", []) if now - t < ATTEMPT_WINDOW]
-            attempts.append(now)
-            session["failed_attempts"] = attempts
-            attempts_left = MAX_ATTEMPTS - len(attempts)
-            if attempts_left <= 0:
-                session["locked_until"] = now + LOCKOUT_SECONDS
-                session.pop("failed_attempts", None)
-            else:
-                flash(f"Incorrect password. {attempts_left} attempt{'s' if attempts_left != 1 else ''} remaining.")
+        username = request.form.get("username") or ""
+        password = request.form.get("password") or ""
+        if not username or not password:
+            # Not a credential verdict — consumes no attempt.
+            flash("Enter your Jellyfin username and password.")
             return redirect(url_for("login"))
+
+        if not JELLYFIN_URL:
+            flash("JELLYFIN_URL is not configured.")
+            return redirect(url_for("login"))
+
+        try:
+            user = authenticate_jellyfin(username, password)
+        except JellyfinUnreachable:
+            # A connection failure is NOT a failed attempt: it says nothing
+            # about the credentials, so it must not consume one.
+            flash("Can't reach the Jellyfin server. Try again in a moment.")
+            return redirect(url_for("login"))
+
+        if user is not None:
+            # clear() first: drops failed-attempt state AND rotates the session
+            # so a pre-login session value can never survive (session fixation).
+            session.clear()
+            session["auth"] = True
+            session["user"] = user.get("Name", "")
+            return redirect(url_for("index"))
+
+        now = time.time()
+        attempts = [t for t in session.get("failed_attempts", []) if now - t < ATTEMPT_WINDOW]
+        attempts.append(now)
+        session["failed_attempts"] = attempts
+        attempts_left = MAX_ATTEMPTS - len(attempts)
+        if attempts_left <= 0:
+            session["locked_until"] = now + LOCKOUT_SECONDS
+            session.pop("failed_attempts", None)
+        else:
+            flash(f"Wrong username or password. {attempts_left} attempt{'s' if attempts_left != 1 else ''} remaining.")
+        return redirect(url_for("login"))
 
     remaining = lockout_remaining()
     if remaining:
@@ -226,26 +310,27 @@ def scan():
     if not authenticated():
         return jsonify({"error": "Unauthorized"}), 401
 
+    user = session.get("user", "")
     with scan_lock:
         remaining = cooldown_remaining()
         if remaining > 0:
-            record_press(OUTCOME_COOLDOWN)
+            record_press(OUTCOME_COOLDOWN, user=user)
             return jsonify({"error": "Scan cooldown active", "remaining_ms": int(remaining * 1000)}), 429
 
         if not JELLYFIN_URL or not JELLYFIN_API_KEY:
             msg = "JELLYFIN_URL or JELLYFIN_API_KEY not configured"
-            record_press(OUTCOME_ERROR, error=msg)
+            record_press(OUTCOME_ERROR, error=msg, user=user)
             return jsonify({"error": msg}), 500
 
         try:
             r = requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers=jf_headers(), timeout=10)
             r.raise_for_status()
         except Exception as e:
-            record_press(OUTCOME_ERROR, error=str(e))
+            record_press(OUTCOME_ERROR, error=str(e), user=user)
             return jsonify({"error": str(e)}), 500
 
         # Recorded only on success: this entry IS the cooldown.
-        record_press(OUTCOME_STARTED)
+        record_press(OUTCOME_STARTED, user=user)
         return jsonify({"status": "started"})
 
 

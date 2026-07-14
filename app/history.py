@@ -31,6 +31,7 @@ MAX_ENTRIES = 500
 # Cap everything we persist so nobody can bloat the file.
 MAX_TEXT_LEN = 256
 MAX_IP_LEN = 64
+MAX_USER_LEN = 64
 
 
 def _clip(value, limit):
@@ -100,6 +101,9 @@ class ScanHistory:
                     "ip": _clip(row.get("ip", ""), MAX_IP_LEN),
                     "user_agent": _clip(row.get("user_agent", ""), MAX_TEXT_LEN),
                     "error": _clip(row.get("error", ""), MAX_TEXT_LEN),
+                    # Rows written before the Jellyfin-login feature have no
+                    # "user" key; default it so old history files load unchanged.
+                    "user": _clip(row.get("user", ""), MAX_USER_LEN),
                 }
             )
         return entries
@@ -150,7 +154,7 @@ class ScanHistory:
 
     # -- public API --------------------------------------------------------
 
-    def record(self, outcome: str, ip: str = "", user_agent: str = "", error: str = "") -> dict:
+    def record(self, outcome: str, ip: str = "", user_agent: str = "", error: str = "", user: str = "") -> dict:
         entry = {
             "id": uuid.uuid4().hex,
             "ts": time.time(),
@@ -158,6 +162,7 @@ class ScanHistory:
             "ip": _clip(ip, MAX_IP_LEN),
             "user_agent": _clip(user_agent, MAX_TEXT_LEN),
             "error": _clip(error, MAX_TEXT_LEN),
+            "user": _clip(user, MAX_USER_LEN),
         }
         with self._lock:
             entries = self._load()

@@ -37,15 +37,16 @@ def test_empty_history_reads_clean(path):
 
 def test_record_returns_entry_with_full_shape(path):
     h = ScanHistory(path)
-    e = h.record(OUTCOME_STARTED, ip="10.0.0.5", user_agent="curl/8", error="")
+    e = h.record(OUTCOME_STARTED, ip="10.0.0.5", user_agent="curl/8", error="", user="alice")
 
-    assert set(e) == {"id", "ts", "outcome", "ip", "user_agent", "error"}
+    assert set(e) == {"id", "ts", "outcome", "ip", "user_agent", "error", "user"}
     assert isinstance(e["id"], str) and e["id"]
     assert isinstance(e["ts"], float)
     assert e["outcome"] == OUTCOME_STARTED
     assert e["ip"] == "10.0.0.5"
     assert e["user_agent"] == "curl/8"
     assert e["error"] == ""
+    assert e["user"] == "alice"
 
 
 def test_record_read_round_trip_persists_to_disk(path):
@@ -71,6 +72,45 @@ def test_record_defaults_are_empty_strings(path):
     assert e["ip"] == ""
     assert e["user_agent"] == ""
     assert e["error"] == ""
+    assert e["user"] == ""
+
+
+def test_user_round_trips_to_disk(path):
+    ScanHistory(path).record(OUTCOME_STARTED, user="bob")
+    assert ScanHistory(path).entries()[0]["user"] == "bob"
+
+
+def test_user_is_clipped_to_64_chars(path):
+    h = ScanHistory(path)
+    e = h.record(OUTCOME_STARTED, user="U" * 5000)
+    assert len(e["user"]) == 64
+    assert len(ScanHistory(path).entries()[0]["user"]) == 64
+
+
+def test_old_history_file_without_user_keys_still_loads(path):
+    """Pre-feature history files have no "user" key. They must load unchanged
+    (defaulting user to "") and survive a full read-append-write round trip."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    old_rows = [
+        {"id": "a", "ts": 1.0, "outcome": "started", "ip": "1.1.1.1", "user_agent": "UA/1", "error": ""},
+        {"id": "b", "ts": 2.0, "outcome": "error", "ip": "2.2.2.2", "user_agent": "UA/2", "error": "boom"},
+    ]
+    with open(path, "w") as f:
+        json.dump(old_rows, f)
+
+    h = ScanHistory(path)
+    got = h.entries()  # newest first
+    assert [e["id"] for e in got] == ["b", "a"]
+    assert all(e["user"] == "" for e in got)
+    assert h.last_started_at() == 1.0
+    # It was NOT quarantined as damaged.
+    assert not os.path.exists(path + ".corrupt")
+
+    # Round trip: appending a new (user-stamped) row keeps the old rows.
+    h.record(OUTCOME_STARTED, user="carol")
+    reread = ScanHistory(path).entries()
+    assert [e["user"] for e in reread] == ["carol", "", ""]
+    assert [e["id"] for e in reread][1:] == ["b", "a"]
 
 
 def test_ids_are_unique(path):

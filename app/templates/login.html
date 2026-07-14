@@ -190,6 +190,7 @@
     border: 0;
   }
 
+  input[type="text"],
   input[type="password"] {
     width: 100%;
     background: rgba(5, 14, 26, 0.62);
@@ -202,7 +203,10 @@
     outline: none;
     transition: border-color 0.18s ease, box-shadow 0.18s ease;
   }
+  input[type="text"]::placeholder,
   input[type="password"]::placeholder { color: var(--benthos); }
+  input[type="text"]:focus,
+  input[type="text"]:focus-visible,
   input[type="password"]:focus,
   input[type="password"]:focus-visible {
     border-color: var(--brand);
@@ -389,8 +393,10 @@
     <div class="eyebrow card-eyebrow">Access console</div>
     <form method="POST" action="/login">
       <div class="stack">
+        <label class="sr-only" for="username">Jellyfin username</label>
+        <input type="text" id="username" name="username" placeholder="Jellyfin username" autofocus autocomplete="username" />
         <label class="sr-only" for="password">Password</label>
-        <input type="password" id="password" name="password" placeholder="Password" autofocus autocomplete="current-password" />
+        <input type="password" id="password" name="password" placeholder="Password" autocomplete="current-password" />
         <button type="submit">Enter</button>
         {% if error %}
         <div class="error">{{ error }}</div>
@@ -402,7 +408,7 @@
         {% endif %}
       </div>
     </form>
-    <div class="hint">The hatch locks after too many failed attempts.</div>
+    <div class="hint">Sign in with your Jellyfin account. The hatch locks after too many failed attempts.</div>
     {% endif %}
   </section>
 </main>

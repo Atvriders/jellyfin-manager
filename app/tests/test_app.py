@@ -4,56 +4,8 @@ import time
 import pytest
 
 import app as app_module
+from conftest import FakeResponse, login
 from history import OUTCOME_COOLDOWN, OUTCOME_ERROR, OUTCOME_STARTED, ScanHistory
-
-
-class FakeResponse:
-    def __init__(self, payload=None, exc=None):
-        self._payload = payload
-        self._exc = exc
-
-    def raise_for_status(self):
-        if self._exc:
-            raise self._exc
-
-    def json(self):
-        return self._payload
-
-
-@pytest.fixture
-def hist_path(tmp_path):
-    return str(tmp_path / "scan_history.json")
-
-
-@pytest.fixture
-def client(hist_path, monkeypatch):
-    """A configured, isolated app. No network, no /data, no shared globals."""
-    monkeypatch.delenv("TRUST_PROXY", raising=False)
-    # Reset the in-process cooldown safety-net globals so tests don't leak the
-    # fallback/cache into one another.
-    monkeypatch.setattr(app_module, "_last_started_fallback", 0.0)
-    monkeypatch.setattr(app_module, "_last_started_cache", 0.0)
-    monkeypatch.setattr(app_module, "history", ScanHistory(hist_path))
-    monkeypatch.setattr(app_module, "JELLYFIN_URL", "http://jellyfin.test")
-    monkeypatch.setattr(app_module, "JELLYFIN_API_KEY", "api-key")
-    monkeypatch.setattr(app_module, "APP_PASSWORD", "hunter2")
-    app_module.app.config.update(TESTING=True, SECRET_KEY="test-secret")
-    app_module.app.secret_key = "test-secret"
-
-    def boom(*a, **kw):  # any unmocked network call is a test bug
-        raise AssertionError("unexpected network call")
-
-    monkeypatch.setattr(app_module.requests, "post", boom)
-    monkeypatch.setattr(app_module.requests, "get", boom)
-
-    return app_module.app.test_client()
-
-
-@pytest.fixture
-def auth(client):
-    with client.session_transaction() as sess:
-        sess["auth"] = True
-    return client
 
 
 def mock_refresh_ok(monkeypatch, seen=None):
@@ -101,14 +53,16 @@ def test_index_redirects_to_login_when_anonymous(client):
     assert "/login" in r.headers["Location"]
 
 
-def test_login_flow_still_works(client):
-    bad = client.post("/login", data={"password": "wrong"})
+def test_login_flow_still_works(client, jf):
+    jf.auth_status = 401
+    bad = login(client)
     assert bad.status_code == 302
 
     with client.session_transaction() as sess:
         assert sess.get("auth") is not True
 
-    ok = client.post("/login", data={"password": "hunter2"})
+    jf.auth_status = 200
+    ok = login(client)
     assert ok.status_code == 302
     with client.session_transaction() as sess:
         assert sess["auth"] is True
@@ -408,7 +362,7 @@ def test_history_entry_shape(auth, monkeypatch):
     auth.post("/api/scan", headers={"User-Agent": "UA/1"})
 
     entry = auth.get("/api/history").get_json()["entries"][0]
-    assert set(entry) == {"id", "ts", "outcome", "ip", "user_agent", "error"}
+    assert set(entry) == {"id", "ts", "outcome", "ip", "user_agent", "error", "user"}
 
 
 def test_history_empty(auth):
