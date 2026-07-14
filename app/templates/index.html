@@ -13,6 +13,7 @@
     --border:  #2e2e2e;
     --accent:  #00a4dc;
     --green:   #4caf7d;
+    --amber:   #d9a441;
     --red:     #e05260;
     --text:    #e8e8e8;
     --muted:   #888;
@@ -29,6 +30,7 @@
     align-items: center;
     justify-content: center;
     gap: 2.5rem;
+    padding: 2.5rem 1rem;
   }
 
   h1 {
@@ -167,6 +169,127 @@
     text-align: center;
   }
   #status-msg.error { color: var(--red); }
+
+  /* History */
+  .history-card {
+    padding: 1.75rem 1.75rem 1.25rem;
+    align-items: stretch;
+    gap: 1rem;
+    width: 100%;
+    max-width: 640px;
+  }
+
+  .history-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .history-head h2 {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  #history-count {
+    font-size: 0.72rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  #history-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .history-row {
+    display: grid;
+    grid-template-columns: 78px minmax(0, 1fr);
+    gap: 0.25rem 0.85rem;
+    align-items: start;
+    padding: 0.7rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .history-row:first-child { border-top: none; }
+
+  .badge {
+    justify-self: start;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    padding: 0.22rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .badge.started  { color: var(--green); background: rgba(76, 175, 125, 0.13); border-color: rgba(76, 175, 125, 0.35); }
+  .badge.cooldown { color: var(--amber); background: rgba(217, 164, 65, 0.13); border-color: rgba(217, 164, 65, 0.35); }
+  .badge.error    { color: var(--red);   background: rgba(224, 82, 96, 0.13);  border-color: rgba(224, 82, 96, 0.35); }
+  .badge.unknown  { color: var(--muted); background: rgba(136, 136, 136, 0.13); border-color: var(--border); }
+
+  .history-main { min-width: 0; }
+
+  .history-when {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .history-rel {
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+
+  .history-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    color: var(--muted);
+    min-width: 0;
+  }
+
+  .history-ip {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--muted);
+    white-space: nowrap;
+    flex: none;
+  }
+
+  .history-sep { color: var(--border); flex: none; }
+
+  .history-ua {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    cursor: help;
+  }
+
+  .history-err {
+    grid-column: 2;
+    margin-top: 0.3rem;
+    font-size: 0.72rem;
+    color: var(--red);
+    overflow-wrap: anywhere;
+  }
+
+  #history-empty, #history-error {
+    display: none;
+    font-size: 0.8rem;
+    color: var(--muted);
+    text-align: center;
+    padding: 0.6rem 0;
+  }
+  #history-error.show, #history-empty.show { display: block; }
+  #history-error { color: var(--red); opacity: 0.8; }
 </style>
 </head>
 <body>
@@ -196,6 +319,16 @@
   </div>
 
   <div id="status-msg"></div>
+</div>
+
+<div class="card history-card">
+  <div class="history-head">
+    <h2>Scan History</h2>
+    <span id="history-count"></span>
+  </div>
+  <div id="history-list"></div>
+  <div id="history-empty">No scans recorded yet.</div>
+  <div id="history-error">Couldn’t load scan history.</div>
 </div>
 
 <script>
@@ -296,6 +429,163 @@
 
   syncState();
 
+  /* ---------------- Scan history ----------------
+     SECURITY: every value below (ip, user_agent, error) is client-controlled.
+     Rows are built with createElement + textContent ONLY. Never innerHTML. */
+
+  const historyList  = document.getElementById('history-list');
+  const historyEmpty = document.getElementById('history-empty');
+  const historyError = document.getElementById('history-error');
+  const historyCount = document.getElementById('history-count');
+
+  const OUTCOMES = { started: 'started', cooldown: 'cooldown', error: 'error' };
+
+  function formatWhen(ts) {
+    const d = new Date(ts * 1000);
+    if (isNaN(d.getTime())) return 'Unknown time';
+    return d.toLocaleString(undefined, {
+      month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', second: '2-digit'
+    });
+  }
+
+  function relativeTime(ts) {
+    const d = new Date(ts * 1000);
+    if (isNaN(d.getTime())) return '';
+    const sec = Math.round((Date.now() - d.getTime()) / 1000);
+    if (sec < 0)    return 'just now';
+    if (sec < 45)   return 'just now';
+    const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's') + ' ago';
+    const min = Math.round(sec / 60);
+    if (min < 60)   return plural(min, 'minute');
+    const hrs = Math.round(min / 60);
+    if (hrs < 24)   return plural(hrs, 'hour');
+    const days = Math.round(hrs / 24);
+    if (days < 30)  return plural(days, 'day');
+    const months = Math.round(days / 30);
+    if (months < 12) return plural(months, 'month');
+    return plural(Math.round(months / 12), 'year');
+  }
+
+  // Best-effort friendly label. Falls back to the raw UA (CSS-truncated).
+  // Return value is ALWAYS inserted with textContent, never as markup.
+  function shortUA(ua) {
+    if (!ua) return 'unknown browser';
+    const browsers = [
+      [/Edg(?:e|A|iOS)?\/(\d+)/,  'Edge'],
+      [/OPR\/(\d+)/,              'Opera'],
+      [/Firefox\/(\d+)/,          'Firefox'],
+      [/CriOS\/(\d+)/,            'Chrome'],
+      [/Chrome\/(\d+)/,           'Chrome'],
+      [/Version\/(\d+).*Safari/,  'Safari'],
+      [/curl\/([\d.]+)/,          'curl'],
+      [/python-requests\/([\d.]+)/, 'python-requests'],
+      [/Wget\/([\d.]+)/,          'Wget'],
+    ];
+    const platforms = [
+      [/Windows NT 10/, 'Windows'],
+      [/Windows/,       'Windows'],
+      [/iPhone|iPad|iPod/, 'iOS'],
+      [/Mac OS X/,      'macOS'],
+      [/Android/,       'Android'],
+      [/CrOS/,          'ChromeOS'],
+      [/Linux/,         'Linux'],
+    ];
+    let name = '';
+    for (const [re, label] of browsers) {
+      const m = ua.match(re);
+      if (m) { name = label + ' ' + m[1]; break; }
+    }
+    if (!name) return ua; // unknown agent: show it raw, truncated by CSS
+    let os = '';
+    for (const [re, label] of platforms) {
+      if (re.test(ua)) { os = label; break; }
+    }
+    return os ? name + ' · ' + os : name;
+  }
+
+  function clear(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function buildRow(entry) {
+    const outcome = OUTCOMES[entry.outcome] || null;
+    const row = el('div', 'history-row');
+
+    const badge = el('span', 'badge ' + (outcome || 'unknown'), outcome || 'unknown');
+    row.appendChild(badge);
+
+    const main = el('div', 'history-main');
+
+    const when = el('div', 'history-when');
+    const ts = typeof entry.ts === 'number' ? entry.ts : Number(entry.ts);
+    when.appendChild(el('span', 'history-time', formatWhen(ts)));
+    const rel = relativeTime(ts);
+    if (rel) when.appendChild(el('span', 'history-rel', rel));
+    main.appendChild(when);
+
+    const meta = el('div', 'history-meta');
+    const ip = entry.ip ? String(entry.ip) : 'unknown IP';
+    meta.appendChild(el('span', 'history-ip', ip));
+    meta.appendChild(el('span', 'history-sep', '•'));
+
+    const ua = entry.user_agent ? String(entry.user_agent) : '';
+    const uaEl = el('span', 'history-ua', shortUA(ua));
+    uaEl.title = ua || 'No User-Agent sent';   // property assignment, not markup
+    meta.appendChild(uaEl);
+    main.appendChild(meta);
+
+    row.appendChild(main);
+
+    if (entry.error) {
+      row.appendChild(el('div', 'history-err', String(entry.error)));
+    }
+    return row;
+  }
+
+  function renderHistory(entries) {
+    clear(historyList);
+    historyError.classList.remove('show');
+
+    if (!entries.length) {
+      historyEmpty.classList.add('show');
+      historyCount.textContent = '';
+      return;
+    }
+    historyEmpty.classList.remove('show');
+    historyCount.textContent = entries.length === 1
+      ? '1 press'
+      : entries.length + ' presses';
+
+    const frag = document.createDocumentFragment();
+    for (const entry of entries) {
+      if (entry && typeof entry === 'object') frag.appendChild(buildRow(entry));
+    }
+    historyList.appendChild(frag);
+  }
+
+  async function refreshHistory() {
+    try {
+      const r = await fetch('/api/history?limit=50');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      renderHistory(Array.isArray(d.entries) ? d.entries : []);
+    } catch (_) {
+      // Quiet failure: leave whatever is already rendered, just flag it.
+      historyEmpty.classList.remove('show');
+      historyError.classList.add('show');
+    }
+  }
+
+  refreshHistory();
+
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     statusMsg.textContent = '';
@@ -315,6 +605,9 @@
       statusMsg.textContent = 'Error: ' + e.message;
       statusMsg.className = 'error';
       btn.disabled = false;
+    } finally {
+      // Every press is recorded server-side: started, cooldown AND error.
+      refreshHistory();
     }
   });
 </script>

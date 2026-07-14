@@ -1,8 +1,11 @@
 import os
+import threading
 import time
 
 import requests
 from flask import Flask, flash, get_flashed_messages, jsonify, redirect, render_template, request, session, url_for
+
+from history import MAX_ENTRIES, OUTCOME_COOLDOWN, OUTCOME_ERROR, OUTCOME_STARTED, ScanHistory
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
@@ -16,8 +19,28 @@ ATTEMPT_WINDOW = 5 * 60     # 5 minutes
 LOCKOUT_SECONDS = 60 * 60   # 1 hour
 COOLDOWN_SECONDS = 60 * 60  # 1 hour
 
-# Server-side shared scan state
-scan_until = 0  # epoch seconds when cooldown expires
+# Scan history. Lives on a bind mount (docker-compose: ./data:/data) so it — and
+# therefore the cooldown, which is derived from it — survives a container
+# restart or an image pull. There is deliberately no in-memory `scan_until`:
+# that global reset on every restart and let anyone scan again immediately.
+DATA_DIR = os.environ.get("DATA_DIR", "/data")
+HISTORY_PATH = os.path.join(DATA_DIR, "scan_history.json")
+history = ScanHistory(HISTORY_PATH)
+
+# Serialises the cooldown check -> Jellyfin call -> "started" record sequence.
+# The dev server is threaded, so without this two simultaneous presses both pass
+# the cooldown check and both kick off a scan.
+scan_lock = threading.Lock()
+
+# In-process cooldown safety net. The cooldown's source of truth is the last
+# OUTCOME_STARTED row on disk, but disk can fail two ways that must NOT silently
+# disable rate limiting (fail-open):
+#   * a STARTED record can't be persisted (read-only /data, disk full)  -> _last_started_fallback
+#   * the history file can't be read at all (EMFILE/EACCES/EIO)         -> fall back to last good read
+# Both let the cooldown survive for the life of the process instead of vanishing.
+_state_lock = threading.Lock()
+_last_started_fallback = 0.0   # set when a STARTED record fails to persist
+_last_started_cache = 0.0      # most recent last_started_at successfully read from disk
 
 
 def jf_headers():
@@ -26,6 +49,75 @@ def jf_headers():
 
 def authenticated():
     return session.get("auth") is True
+
+
+def client_ip():
+    """Best-effort client IP.
+
+    X-Forwarded-For is trivially spoofed by anyone who can reach the app, and
+    this app is reachable on the LAN — so only believe it when the operator has
+    explicitly said there IS a proxy in front (TRUST_PROXY=1).
+    """
+    if os.environ.get("TRUST_PROXY") == "1":
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded.strip():
+            # Assume exactly ONE trusted proxy. It appends the address it
+            # actually observed to the RIGHT of any client-supplied value, so
+            # the rightmost token is the real peer. The leftmost is fully
+            # attacker-controlled (a client can prepend a forged/victim IP) and
+            # must never be trusted, even behind a legitimate proxy.
+            return forwarded.split(",")[-1].strip()
+    return request.remote_addr or ""
+
+
+def record_press(outcome, error=""):
+    """Record a button press. Never lets a history problem break the button."""
+    try:
+        return history.record(
+            outcome,
+            ip=client_ip(),
+            user_agent=request.headers.get("User-Agent", ""),
+            error=error,
+        )
+    except Exception:  # e.g. read-only /data — log it, but still serve the user
+        app.logger.exception("failed to record scan history entry")
+        if outcome == OUTCOME_STARTED:
+            # The scan really started but we couldn't persist the row the
+            # cooldown is derived from. Without this the cooldown would silently
+            # cease to exist and the button could be held down to hammer
+            # Jellyfin. Keep it alive in-process for the life of this process.
+            global _last_started_fallback
+            with _state_lock:
+                _last_started_fallback = time.time()
+        return None
+
+
+def cooldown_remaining():
+    """Seconds left on the cooldown, derived from the last successful scan.
+
+    Fails CLOSED: if the history file can't be read (or a STARTED record
+    couldn't be written), we do NOT return 0 and hand out a free scan — we fall
+    back to the last known-good scan time, or to a full cooldown if we have no
+    baseline at all.
+    """
+    global _last_started_cache
+    try:
+        last_started = history.last_started_at()
+    except Exception:
+        app.logger.exception("failed to read scan history")
+        with _state_lock:
+            baseline = max(_last_started_cache, _last_started_fallback)
+        if baseline <= 0:
+            # Never observed a successful scan, and now we can't read the file.
+            # Assume a scan just happened rather than risk hammering Jellyfin.
+            return float(COOLDOWN_SECONDS)
+        return max(0.0, baseline + COOLDOWN_SECONDS - time.time())
+
+    with _state_lock:
+        if last_started > _last_started_cache:
+            _last_started_cache = last_started
+        baseline = max(last_started, _last_started_fallback)
+    return max(0.0, baseline + COOLDOWN_SECONDS - time.time())
 
 
 def lockout_remaining():
@@ -85,8 +177,29 @@ def index():
 def scan_state():
     if not authenticated():
         return jsonify({"error": "Unauthorized"}), 401
-    remaining = max(0, scan_until - time.time())
+    remaining = cooldown_remaining()
     return jsonify({"active": remaining > 0, "remaining_ms": int(remaining * 1000)})
+
+
+@app.route("/api/history")
+def scan_history():
+    if not authenticated():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    def as_int(name, default):
+        try:
+            return max(0, int(request.args.get(name, default)))
+        except (TypeError, ValueError):
+            return default
+
+    limit = min(as_int("limit", 50), MAX_ENTRIES)
+    offset = as_int("offset", 0)
+    try:
+        entries = history.entries(limit=limit, offset=offset)
+    except Exception:  # a broken history file must not break the page
+        app.logger.exception("failed to read scan history")
+        entries = []
+    return jsonify({"entries": entries})
 
 
 @app.route("/api/scan/progress")
@@ -110,20 +223,30 @@ def scan_progress():
 
 @app.route("/api/scan", methods=["POST"])
 def scan():
-    global scan_until
     if not authenticated():
         return jsonify({"error": "Unauthorized"}), 401
-    if time.time() < scan_until:
-        return jsonify({"error": "Scan cooldown active", "remaining_ms": int((scan_until - time.time()) * 1000)}), 429
-    if not JELLYFIN_URL or not JELLYFIN_API_KEY:
-        return jsonify({"error": "JELLYFIN_URL or JELLYFIN_API_KEY not configured"}), 500
-    try:
-        r = requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers=jf_headers(), timeout=10)
-        r.raise_for_status()
-        scan_until = time.time() + COOLDOWN_SECONDS
+
+    with scan_lock:
+        remaining = cooldown_remaining()
+        if remaining > 0:
+            record_press(OUTCOME_COOLDOWN)
+            return jsonify({"error": "Scan cooldown active", "remaining_ms": int(remaining * 1000)}), 429
+
+        if not JELLYFIN_URL or not JELLYFIN_API_KEY:
+            msg = "JELLYFIN_URL or JELLYFIN_API_KEY not configured"
+            record_press(OUTCOME_ERROR, error=msg)
+            return jsonify({"error": msg}), 500
+
+        try:
+            r = requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers=jf_headers(), timeout=10)
+            r.raise_for_status()
+        except Exception as e:
+            record_press(OUTCOME_ERROR, error=str(e))
+            return jsonify({"error": str(e)}), 500
+
+        # Recorded only on success: this entry IS the cooldown.
+        record_press(OUTCOME_STARTED)
         return jsonify({"status": "started"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

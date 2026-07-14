@@ -8,4 +8,16 @@ services:
       - JELLYFIN_API_KEY=your_api_key_here
       - APP_PASSWORD=changeme
       - SECRET_KEY=change_this_to_a_random_string
+      # Where the scan history is written. Must match the container side of the
+      # volume below, otherwise history is lost on every update.
+      - DATA_DIR=/data
+      # Uncomment if you run this behind a reverse proxy (nginx, Traefik,
+      # Cloudflare Tunnel, ...) so the history records the real client IP
+      # instead of the proxy's IP.
+      # - TRUST_PROXY=1
+    volumes:
+      # REQUIRED: scan history lives here. Without this bind mount the history
+      # is stored in the container's writable layer and is DESTROYED on every
+      # `docker compose pull` / recreate.
+      - ./data:/data
     restart: unless-stopped

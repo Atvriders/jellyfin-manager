@@ -1,3 +1,8 @@
 .env
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Scan history bind mount. Contains client IP addresses and User-Agents —
+# never commit this to a public repo.
+data/

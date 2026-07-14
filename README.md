@@ -1,14 +1,14 @@
 # Jellyfin Manager
 
-A lightweight web UI for managing your Jellyfin media server — view libraries, monitor scan tasks, and trigger library refreshes from a single dashboard.
+A lightweight, password-protected web page with one button: **Scan Media Library**. Pressing it triggers a full library refresh on your Jellyfin server, shows live scan progress, and then enforces a 1-hour cooldown so the server doesn't get hammered. Every press is recorded to an on-disk history you can review from the page.
 
 ## Features
 
-- Live connection status to your Jellyfin server
-- Browse all media libraries with type icons
-- View and run/stop scheduled scan tasks
-- Real-time progress bars via Server-Sent Events (SSE)
-- Scan all libraries with one click
+- One-click full library scan (calls Jellyfin's `/Library/Refresh`)
+- Live scan progress, polled from Jellyfin's scheduled tasks
+- 1-hour cooldown after each scan, shared across all clients and **persisted to disk** (restarting the container no longer resets it)
+- **Scan history** — every button press is logged with its outcome (`started`, `cooldown`, `error`), timestamp, client IP and User-Agent
+- Single shared password login with rate-limited attempts
 - Dark UI themed to match Jellyfin
 
 ## Requirements
@@ -31,33 +31,123 @@ A lightweight web UI for managing your Jellyfin media server — view libraries,
    environment:
      - JELLYFIN_URL=http://192.168.1.100:8096
      - JELLYFIN_API_KEY=your_api_key_here
+     - APP_PASSWORD=pick_a_password
+     - SECRET_KEY=some_long_random_string
+     - DATA_DIR=/data
    ```
    > Get your API key from Jellyfin: **Dashboard → Advanced → API Keys → + New Key**
 
-3. **Pull the image**
+   Set `SECRET_KEY` to a long random value, otherwise it is regenerated on every
+   restart and everyone gets logged out. Generate one with:
+   ```bash
+   python3 -c "import secrets; print(secrets.token_hex(32))"
+   ```
+
+3. **Check the volume (required — see [Data & persistence](#data--persistence))**
+
+   `docker-compose.yml` ships with the bind mount already in place:
+   ```yaml
+   volumes:
+     - ./data:/data
+   ```
+   Don't remove it. Without it, your scan history and cooldown are wiped every time you update the image.
+
+4. **Pull the image**
    ```bash
    docker pull ghcr.io/atvriders/jellyfin-manager:latest
    ```
 
-4. **Start the app**
+5. **Start the app**
    ```bash
    docker compose up -d
    ```
 
-4. **Open in browser**
+6. **Open in browser**
    ```
    http://localhost:5455
    ```
 
+## Data & persistence
+
+The app writes its scan history to `$DATA_DIR/scan_history.json`, and the shared
+1-hour cooldown is **derived from that file** (from the timestamp of the last
+`started` entry).
+
+The bind mount in `docker-compose.yml` is therefore **required**:
+
+```yaml
+volumes:
+  - ./data:/data
+environment:
+  - DATA_DIR=/data
+```
+
+Anything written inside the container that isn't on a volume lives in the
+container's writable layer, which Docker **destroys** when the container is
+recreated — which happens on every `docker compose pull` / `docker compose up -d`
+after a new image is published. Without the bind mount you would silently lose
+your entire scan history, and the cooldown would reset, on every single update.
+
+The app still starts without a volume (it falls back to `/data` inside the
+container) — the history is simply ephemeral, which is almost certainly not what
+you want.
+
+Retention: the most recent **500** entries are kept; older ones are trimmed
+automatically.
+
+### Privacy
+
+`data/scan_history.json` records the **client IP address** and **User-Agent** of
+every button press. That's the only identifying signal available, since the app
+has a single shared password rather than per-user accounts.
+
+`data/` is in `.gitignore` — keep it that way. This is a public repo, and
+committing that file would publish the IP addresses of everyone who uses your
+instance.
+
+### Behind a reverse proxy
+
+If you run this behind nginx, Traefik, Caddy, a Cloudflare Tunnel, etc., the
+request appears to come from the proxy, so **every history entry will show the
+proxy's IP** instead of the real client's.
+
+To fix that, set:
+
+```yaml
+environment:
+  - TRUST_PROXY=1
+```
+
+This makes the app read the client IP from the `X-Forwarded-For` header.
+
+> Only enable `TRUST_PROXY=1` if the app really is behind a proxy that sets
+> `X-Forwarded-For`. If the app is exposed directly, a client can forge that
+> header and spoof the IP recorded in your history.
+
 ## Configuration
 
-| Variable | Description |
-|---|---|
-| `JELLYFIN_URL` | Full URL to your Jellyfin server (include port if needed) |
-| `JELLYFIN_API_KEY` | API key generated from the Jellyfin dashboard |
+| Variable | Default | Description |
+|---|---|---|
+| `JELLYFIN_URL` | — | Full URL to your Jellyfin server (include port if needed) |
+| `JELLYFIN_API_KEY` | — | API key generated from the Jellyfin dashboard |
+| `APP_PASSWORD` | — | Shared password for the login page |
+| `SECRET_KEY` | random per restart | Flask session signing key. Set it, or logins won't survive a restart |
+| `DATA_DIR` | `/data` | Directory the scan history is written to |
+| `TRUST_PROXY` | unset | Set to `1` to read the client IP from `X-Forwarded-For` (see above) |
+
+## Development
+
+Tests run against a plain Python 3 install with `flask`, `requests` and `pytest`:
+
+```bash
+python3 -m pytest app/tests -q
+```
+
+CI runs this same suite on every push, **before** the Docker image is built and
+pushed, so a failing test never reaches ghcr.io.
 
 ## Stack
 
-- **Backend:** Python 3.12, Flask, Gunicorn
-- **Frontend:** Vanilla JS, SSE for live updates
-- **Container:** Docker / Docker Compose
+- **Backend:** Python 3.12, Flask
+- **Frontend:** Vanilla JS (no build step)
+- **Container:** Docker / Docker Compose, image published to GitHub Container Registry

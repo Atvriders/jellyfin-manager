@@ -22,6 +22,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r app/requirements.txt pytest
+
+      # Gate the build on the test suite: a broken build must never reach ghcr.io.
+      - name: Run tests
+        run: python3 -m pytest app/tests -q
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
