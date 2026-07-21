@@ -770,13 +770,13 @@
     var MAXTILT = 3 * Math.PI / 180; /* mouse parallax: +-3 degrees */
     var PULSE_Z = -13;               /* shockwaves detonate at mid-depth */
     var CURSOR_Z = -10;              /* cursor light lives at mid-depth */
-    var BELL_SEG = 64, BELL_RINGS = 36;   /* dense hero bell */
+    var BELL_SEG = 96, BELL_RINGS = 48;   /* super-res hero bell */
     var HERO_Z = -8.2;               /* the Medusa's depth */
     var N_SIL = 6;                   /* distant silhouettes */
-    var CH_TENT = 24, TENT_NODES = 16;    /* marginal tentacles (verlet) */
-    var CH_ARM = 4, ARM_NODES = 12;       /* frilled oral arms (verlet) */
+    var CH_TENT = 32, TENT_NODES = 24;    /* marginal tentacles (verlet) */
+    var CH_ARM = 4, ARM_NODES = 16;       /* frilled oral arms (verlet) */
     var CHAINS = CH_TENT + CH_ARM;
-    var TOTAL_NODES = CH_TENT * TENT_NODES + CH_ARM * ARM_NODES;  /* 432 */
+    var TOTAL_NODES = CH_TENT * TENT_NODES + CH_ARM * ARM_NODES;  /* 832 */
     var TENT_LEN = 1.55, ARM_LEN = 1.05;  /* in bell-local units */
     var BREATH = 4.5;                /* seconds per contraction cycle */
     var TWO_PI = 6.283185307179586;
@@ -807,9 +807,11 @@
 
     /* GL objects (rebuilt wholesale on context restore) */
     var progBack = null, progBell = null, progRib = null, progSil = null;
-    var progShell = null, progGlow = null;
+    var progShell = null, progGlow = null, progAura = null;
+    var progMote = null, progStar = null;
     var quadBuf = null, bellVBuf = null, bellIBuf = null;
     var ribVBuf = null, ribIBuf = null, silBuf = null, shellBuf = null;
+    var moteBuf = null;
     var bellIdxCount = 0, ribIdxCount = 0;
 
     /* ---------------------------------------------------- the Medusa (hero) */
@@ -822,8 +824,12 @@
     var flare = 0;                   /* pulse brightness flare */
     var kink = 0;                    /* post-poke tentacle zigzag energy */
     var gonadPulse = 0;              /* contraction wave sampled at the gonad ring */
-    var heroBright = 0.6, shaftGlow = 0.5, iridPh = 0, wobPh = 0;
+    var heroBright = 0.6, shaftGlow = 0.5, iridPh = 0, wobPh = 0, flutPh = 0;
+    var rayPh = 0, starTw = 0, starInt = 0;   /* Ascension: bounded phases */
+    var ripX = 0, ripY = 0, ripZ = 0, ripR = 0, ripA = 0;  /* mote click ripple */
+    var heroU = 0.5, heroV = 0.5, heroR = 0.3, heroDk = 0;  /* backdrop contrast pocket */
     var m9 = new Float32Array(9);    /* bell model rot*scale, column-major */
+    var m9i = new Float32Array(9);   /* its inverse (world dir -> bell local) */
     var mgX = 0, mgY = 0, mgZ = 0;   /* margin-point scratch */
 
     /* verlet chains: preallocated, zero per-frame allocation */
@@ -874,6 +880,37 @@
       }
     })();
 
+    /* ascending star-motes: static instance data, preallocated once
+       (ox, oy0, oz, size | rise rate, seed, twinkle rate, alpha) —
+       radius biased inward so the dust is dense near her, sparse far.
+       The motes' u_time is bounded: uploaded as timeS % MOTE_T, so every
+       rate is quantized at build time to whole cycles per MOTE_T (rise to
+       k*span/T, twinkle to k*2pi/T; granularity ~0.01 — imperceptible) and
+       the wrap at T is seamless. Keeps fp32 phase math precise forever. */
+    var MOTE_T = 600;                /* shared mote period, seconds */
+    var N_MOTE = 90;                 /* buffer holds all; mobile draws fewer */
+    var moteCount = N_MOTE;
+    var moteF = new Float32Array(N_MOTE * 8);
+    (function () {
+      function fr(x) { var s = Math.sin(x) * 43758.5453; return s - Math.floor(s); }
+      var i, o;
+      for (i = 0; i < N_MOTE; i++) {
+        o = i * 8;
+        var rr = Math.pow(fr(i * 12.9898 + 1.3), 1.7) * 3.4 + 0.3;
+        var aa = fr(i * 78.233 + 2.1) * TWO_PI;
+        moteF[o] = Math.cos(aa) * rr;
+        moteF[o + 1] = fr(i * 3.7 + 0.7) * 6.5;
+        moteF[o + 2] = (fr(i * 9.1 + 4.2) - 0.5) * 2.4;
+        moteF[o + 3] = 0.05 + 0.075 * fr(i * 5.3 + 3.3);
+        moteF[o + 4] = Math.round((0.28 + 0.5 * fr(i * 7.7 + 0.2))
+          * MOTE_T / 6.5) * 6.5 / MOTE_T;
+        moteF[o + 5] = fr(i * 11.3 + 5.9) * TWO_PI;
+        moteF[o + 6] = Math.round((1.4 + 2.6 * fr(i * 17.9 + 2.7))
+          * MOTE_T / TWO_PI) * TWO_PI / MOTE_T;
+        moteF[o + 7] = (0.30 + 0.45 * fr(i * 23.1 + 8.8)) * Math.max(0.25, 1.2 - 0.22 * rr);
+      }
+    })();
+
     /* shockwave shells (pulse), max 6 concurrent, slots reused */
     var shells = new Array(MAX_SHELL);
     var ji;
@@ -905,14 +942,21 @@
       'uniform vec4 u_shaft;',
       'uniform float u_activity;',
       'uniform float u_aspect;',
-      'float shaft(vec2 uv, float off, float wBase, float slope, float sv) {',
-      '  float depth = 1.0 - uv.y;',
-      '  float cx = (0.62 + off) * u_aspect + depth * slope;',
-      '  float w = wBase * (1.0 + depth * 2.4);',
-      '  float d = abs(uv.x * u_aspect - cx) / w;',
+      /* nature-documentary staging: a soft dark pocket of water directly
+         behind the hero so the luminous creature pops off the frame */
+      'uniform vec4 u_hero;',   /* uv.x, uv.y, radius (v units), strength */
+      /* Ascension: every shaft is aimed at the Medusa — they spread apart at
+         the surface and converge on her anchor (u_hero.xy), an annunciation
+         column; the light dies just below her so she stands at its foot */
+      'float shaft(vec2 uv, float off, float wBase, float sv) {',
+      '  float hx = u_hero.x * u_aspect;',
+      '  float dy = clamp((uv.y - u_hero.y) / max(1.08 - u_hero.y, 0.30), 0.0, 1.5);',
+      '  float cx = hx + off * u_aspect * dy;',
+      '  float w = wBase * (0.5 + dy * 2.0);',
+      '  float d = abs(uv.x * u_aspect - cx) / max(w, 0.015);',
       '  float fall = max(0.0, 1.0 - d);',
       '  fall *= fall;',
-      '  float fade = smoothstep(0.12, 0.9, uv.y);',
+      '  float fade = smoothstep(u_hero.y - 0.34, u_hero.y + 0.22, uv.y);',
       '  return fall * fade * (0.72 + 0.28 * sv);',
       '}',
       'void main() {',
@@ -921,16 +965,30 @@
       '  vec3 top = vec3(0.043, 0.125, 0.212);',   /* #0B2036 */
       '  vec3 col = mix(bot, mid, smoothstep(0.0, 0.62, v_uv.y));',
       '  col = mix(col, top, smoothstep(0.62, 1.0, v_uv.y));',
-      '  float s = 0.0;',
-      '  s += shaft(v_uv, 0.0, 0.05, 0.30, u_shaft.x) * 0.085;',
-      '  s += shaft(v_uv, -0.10, 0.085, 0.44, u_shaft.y) * 0.062;',
-      '  s += shaft(v_uv, 0.09, 0.12, 0.20, u_shaft.z) * 0.050;',
-      '  s += shaft(v_uv, -0.23, 0.16, 0.58, u_shaft.w) * 0.036;',
-      '  col += vec3(0.51, 0.725, 0.922) * s;',
-      '  col += vec3(0.5, 0.85, 1.0) * (u_activity * 0.06);',
+      /* two inner shafts land gold on her crown; two outer stay cool and
+         faint — the warmth belongs to the light that FOUND her */
+      '  float sg = 0.0;',
+      '  sg += shaft(v_uv, 0.02, 0.055, u_shaft.x) * 0.215;',
+      '  sg += shaft(v_uv, -0.13, 0.085, u_shaft.y) * 0.135;',
+      '  float sc = 0.0;',
+      '  sc += shaft(v_uv, 0.17, 0.120, u_shaft.z) * 0.085;',
+      '  sc += shaft(v_uv, -0.31, 0.150, u_shaft.w) * 0.060;',
+      /* the heavens surge while the scan runs */
+      '  float surge = 1.0 + 0.55 * u_activity;',
+      /* white-gold grade lives in the LIGHT only (never the flesh) */
+      '  col += vec3(0.95, 0.87, 0.68) * (sg * surge);',
+      '  col += vec3(0.55, 0.72, 0.90) * (sc * surge);',
+      '  col += vec3(0.5, 0.85, 1.0) * (u_activity * 0.05);',
+      /* local darkening behind the hero (slightly elongated down the drape) */
+      '  vec2 hd = vec2((v_uv.x - u_hero.x) * u_aspect, (v_uv.y - u_hero.y) * 0.8);',
+      '  float hk = exp(-dot(hd, hd) / max(u_hero.z * u_hero.z, 1e-4));',
+      '  col *= 1.0 - u_hero.w * hk;',
       /* radial falloff so the corners breathe dark, like the 2D backdrop */
       '  vec2 cc = vec2((v_uv.x - 0.5) * u_aspect, v_uv.y - 0.45);',
       '  col *= 1.0 - 0.35 * smoothstep(0.35, 1.15, length(cc));',
+      /* fine photographic grain: kills the flat-gradient CG look of the water */
+      '  float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);',
+      '  col += (grain - 0.5) * 0.010;',
       '  gl_FragColor = vec4(col, 1.0);',
       '}'
     ].join('\n');
@@ -964,6 +1022,10 @@
       '  float lobe = cos(8.0 * phi);',
       '  r += 0.062 * sc * sc * lobe * r;',      /* 8-lobe scalloped margin */
       '  y -= 0.075 * sc * sc * (0.5 + 0.5 * lobe);', /* lappet tips droop, notches ride high */
+      /* lappet flutter: high-frequency, low-amplitude wave riding the rim */
+      '  float fl = sc * sc * sc;',
+      '  y += 0.015 * fl * sin(24.0 * phi + u_fl + 2.0 * lobe);',
+      '  r += 0.006 * fl * sin(24.0 * phi - u_fl + 1.1);',
       '  r *= 1.0 - 0.22 * ctr * smoothstep(0.1, 0.9, t);',
       '  y += 0.06 * ctr * (1.0 - smoothstep(0.0, 0.7, t));',
       '  y -= 0.13 * ctr * sc;',
@@ -980,9 +1042,11 @@
       'uniform vec2 u_dim;',
       'uniform float u_vpw;',
       'uniform float u_floor;',
+      'uniform float u_fl;',
       'varying vec2 v_tp;',
       'varying vec3 v_n;',
       'varying vec3 v_wp;',
+      'varying vec3 v_lp;',
       'varying float v_dim;',
       DIM_GLSL,
       BELL_FN,
@@ -999,6 +1063,7 @@
       '  gl_Position = u_vp * vec4(world, 1.0);',
       '  v_n = normalize(u_m * nl);',
       '  v_wp = world;',
+      '  v_lp = p0;',
       '  v_tp = a_tp;',
       '  vec4 cc = u_vp * vec4(u_pos, 1.0);',
       '  float px = (cc.x / max(cc.w, 0.0001) * 0.5 + 0.5) * u_vpw;',
@@ -1011,76 +1076,145 @@
       'varying vec2 v_tp;',
       'varying vec3 v_n;',
       'varying vec3 v_wp;',
+      'varying vec3 v_lp;',
       'varying float v_dim;',
       'uniform vec3 u_cam;',
       'uniform float u_glow;',
       'uniform float u_sg;',    /* light-shaft brightness 0..1 (keys the SSS) */
       'uniform float u_ir;',    /* bounded iridescence shimmer phase */
       'uniform float u_gp;',    /* contraction wave at the gonad ring (CPU) */
+      'uniform float u_pass;',  /* 0 = far (back) wall, 1 = near (front) wall */
+      'uniform mat3 u_mi;',     /* inverse bell model: world dir -> bell local */
+      /* value noise for the mesoglea: continuous in bell-local space (no seam) */
+      'float vhash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }',
+      'float vnoise(vec2 p) {',
+      '  vec2 i = floor(p); vec2 f = fract(p);',
+      '  f = f * f * (3.0 - 2.0 * f);',
+      '  return mix(mix(vhash(i), vhash(i + vec2(1.0, 0.0)), f.x),',
+      '             mix(vhash(i + vec2(0.0, 1.0)), vhash(i + vec2(1.0, 1.0)), f.x), f.y);',
+      '}',
+      /* soft-knee tonemap (Reinhard, white point 2.4): bright cores stay
+         luminous and colored instead of clipping to white soup */
+      'vec3 tonemap(vec3 c) { return c * (vec3(1.0) + c * 0.1736) / (vec3(1.0) + c); }',
       'void main() {',
       '  float t = v_tp.x;',
       '  float phi = v_tp.y;',
       '  vec3 n = normalize(v_n);',
       '  vec3 v = normalize(v_wp - u_cam);',
       '  float nds = dot(n, v);',
+      /* two-pass translucency: each pass keeps only its own wall */
+      '  if (u_pass > 0.5) { if (nds >= 0.0) { gl_FragColor = vec4(0.0); return; } }',
+      '  else if (nds < 0.0) { gl_FragColor = vec4(0.0); return; }',
+      '  vec3 ns = nds < 0.0 ? n : -n;',        /* shading normal, toward the eye */
       '  float ndv = abs(nds);',
-      '  float facing = nds < 0.0 ? 1.0 : 0.55;', /* far wall of the dome, fainter */
-      '  float fres = pow(1.0 - ndv, 2.6);',
+      /* ---- mesoglea: procedural density + micro-wrinkles near the margin */
+      '  float dens = vnoise(v_lp.xz * 5.0) + 0.5 * vnoise(v_lp.zx * 11.0 + 3.7);',
+      '  dens = 0.66 + 0.46 * dens;',           /* ~0.66..1.35 tissue thickness */
+      '  float mgz = smoothstep(0.60, 0.94, t);',
+      '  float wrk = sin(phi * 64.0 + 3.0 * sin(t * 26.0));',
+      '  float ndw = clamp(ndv + wrk * 0.09 * mgz, 0.0, 1.0);',
       '  vec3 L = normalize(vec3(0.30, 1.0, 0.16));',  /* the shafts, from above */
-      /* wrap-light diffuse: light bleeds around the terminator (soft SSS) */
-      '  float wr = clamp((dot(n, L) + 0.7) / 1.7, 0.0, 1.0);',
-      /* forward transmission: shaft light through the jelly toward the eye */
-      '  float trn = pow(clamp(dot(v, -L), 0.0, 1.0), 1.6);',
-      '  vec3 body = vec3(0.52, 0.40, 0.72);',   /* medusa violet */
-      '  vec3 deep = vec3(0.16, 0.11, 0.30);',
-      '  vec3 col = mix(deep, body, wr) * (0.10 + 0.26 * (0.5 + 0.5 * u_sg));',
-      '  col += body * trn * (0.20 + 0.22 * u_sg);',
-      /* fresnel rim, brand-cyan discipline */
-      '  col += vec3(0.35, 0.62, 0.85) * fres * 0.55;',
-      '  col += vec3(0.55, 0.42, 0.80) * pow(1.0 - ndv, 1.4) * 0.18;',
+      /* ---- wrap-light SSS keyed to the shafts: light bleeds around the limb */
+      '  float wr = clamp((dot(ns, L) + 0.85) / 1.85, 0.0, 1.0);',
+      '  wr *= wr;',
+      '  float sss = wr * (0.40 + 0.60 * u_sg);',
+      /* forward transmission: shaft light through the body toward the eye */
+      '  float trn = pow(clamp(dot(v, -L), 0.0, 1.0), 1.5);',
+      '  vec3 body = vec3(0.52, 0.40, 0.72);',  /* medusa violet */
+      '  vec3 deep = vec3(0.13, 0.09, 0.27);',
+      '  vec3 col = mix(deep, body, sss) * (0.10 + 0.30 * sss) * dens;',
+      '  col += body * trn * (0.16 + 0.20 * u_sg) * dens;',
+      /* directional daylight: the dome top visibly brighter than the skirt */
+      '  float dl = max(dot(ns, L), 0.0);',
+      '  col += vec3(0.50, 0.58, 0.82) * dl * dl * (0.10 + 0.18 * u_sg) * dens;',
+      /* multiple-scattering translucency: light pours in at the apex and
+         diffuses down the jelly — the top of a real bell GLOWS, whatever the
+         viewing angle (single-scatter trn is ~0 at 90 degrees to the shafts) */
+      '  float litv = clamp(0.5 + 0.83 * v_lp.y, 0.0, 1.0);',
+      '  col += vec3(0.58, 0.55, 0.80) * litv * litv * (0.14 + 0.20 * u_sg) * dens;',
+      /* micro-wrinkles also catch the light directly */
+      '  col *= 1.0 + 0.055 * wrk * mgz;',
+      /* skirt micro-ring striations: a band of fine concentric rings just
+         below the margin, noise-broken so they read as tissue, not print */
+      '  float srng = sin(t * 140.0 + (vnoise(vec2(phi * 2.6, t * 7.0)) - 0.5) * 6.0);',
+      '  srng = srng * srng * smoothstep(0.55, 0.84, t) * (1.0 - smoothstep(0.94, 1.0, t));',
+      '  col += vec3(0.34, 0.30, 0.52) * srng * 0.10;',
+      /* interior volume glow: light scattered inside the jelly, seen on the
+         far wall through the front — the bell must not be a dark void */
+      '  col += body * (1.0 - u_pass) * (0.10 + 0.14 * u_sg) * (0.6 + 0.4 * sss) * dens;',
+      /* ---- Blinn-Phong wet-glass sheen: tight gleam + broad satin lobe */
+      '  vec3 hv = normalize(L - v);',
+      '  float ndh = max(dot(ns, hv), 0.0);',
+      '  float spec = pow(ndh, 200.0) * 3.2 + pow(ndh, 24.0) * 0.30;',
+      /* faint second catchlight: broken water surface, off-axis */
+      '  vec3 h2 = normalize(normalize(vec3(-0.45, 0.75, 0.35)) - v);',
+      '  spec += pow(max(dot(ns, h2), 0.0), 60.0) * 0.35;',
+      '  spec *= (0.40 + 0.60 * u_sg) * (0.35 + 0.65 * u_pass);',
+      '  spec *= 1.0 - 0.35 * mgz * (0.5 + 0.5 * wrk);',  /* wrinkles break the gleam */
+      '  col += vec3(0.80, 0.90, 1.0) * spec;',
+      /* ---- 3-sample spectral rim: blue refracts widest, red hugs the edge */
+      '  float g1 = 1.0 - ndw;',
+      '  float rimR = pow(g1, 3.6);',
+      '  float rimG = pow(g1, 2.7);',
+      '  float rimB = pow(g1, 2.15);',
+      '  col += vec3(0.40 * rimR + 0.06 * rimB, 0.55 * rimG, 0.85 * rimB) * 0.62;',
+      '  col += vec3(0.55, 0.42, 0.80) * pow(g1, 1.4) * 0.15;',
       /* grazing iridescence, whisper-level */
-      '  float grz = pow(1.0 - ndv, 3.2);',
+      '  float grz = pow(g1, 3.2);',
       '  col += vec3(0.5 + 0.5 * sin(12.0 * ndv + u_ir),',
       '              0.5 + 0.5 * sin(12.0 * ndv + u_ir + 2.09),',
-      '              0.5 + 0.5 * sin(12.0 * ndv + u_ir + 4.19)) * grz * 0.06;',
-      /* ------------- internal anatomy, seen through the face of the dome */
-      '  float face = smoothstep(0.22, 0.62, ndv) * step(0.9, facing);',
-      '  vec2 q = vec2(t * cos(phi), t * sin(phi));',
+      '              0.5 + 0.5 * sin(12.0 * ndv + u_ir + 4.19)) * grz * 0.05;',
+      /* ------------- interior anatomy with true parallax against the shell */
+      '  vec3 vl = normalize(u_mi * v);',       /* view dir in bell-local space */
+      '  float pj = clamp((v_lp.y - 0.08) / max(-vl.y, 0.22), 0.0, 1.3);',
+      '  pj *= u_pass;',                         /* far wall: organs sit on it */
+      '  vec2 q = v_lp.xz + vl.xz * pj;',
+      '  float rr = length(q);',
+      '  float face = smoothstep(0.18, 0.55, ndv);',
       /* four-lobed gonad clover (horseshoes opening toward the center) */
       '  float gon = 0.0;',
       '  for (int k = 0; k < 4; k++) {',
       '    float ga = 0.7854 + float(k) * 1.5708;',
-      '    vec2 ck = vec2(cos(ga), sin(ga)) * 0.40;',
+      '    vec2 ck = vec2(cos(ga), sin(ga)) * 0.36;',
       '    vec2 gp = q - ck;',
       '    float gd = length(gp);',
-      '    float ring = exp(-pow((gd - 0.150) / 0.040, 2.0));',
-      '    float fill = smoothstep(0.165, 0.115, gd);',
-      '    float open = 1.0 - smoothstep(0.15, 0.75, dot(gp / max(gd, 0.001), -ck / 0.40));',
+      '    float ring = exp(-pow((gd - 0.135) / 0.045, 2.0));',
+      '    float fill = smoothstep(0.150, 0.100, gd);',
+      '    float open = 1.0 - smoothstep(0.15, 0.75, dot(gp / max(gd, 0.001), -ck / 0.36));',
       '    gon += (ring * 0.85 + fill * 0.45) * (0.25 + 0.75 * open);',
       '  }',
-      /* the clover breathes with the bell kick (wave phase fed from CPU) */
-      '  col += vec3(0.88, 0.60, 0.72) * gon * face * (0.70 + 0.55 * u_gp);',
-      /* 16 fine radial canals, fading toward the margin */
+      '  gon *= 0.9 + 0.35 * vnoise(q * 14.0);', /* granular gonad tissue */
+      '  float organW = mix(0.30, 1.0, u_pass);',/* faint via the far wall */
+      '  col += vec3(0.92, 0.58, 0.66) * gon * face * organW * (0.85 + 0.60 * u_gp);',
+      /* 16 fine radial canals, fading toward the margin (on the shell wall) */
       '  float can = pow(abs(cos(phi * 8.0)), 48.0);',
       '  can *= smoothstep(0.10, 0.24, t) * (1.0 - 0.55 * t);',
-      '  col += vec3(0.62, 0.72, 0.92) * can * face * 0.22;',
-      /* gastric nucleus + four-pouch cross */
-      '  float nuc = exp(-t * t / 0.008);',
-      '  float cr4 = pow(abs(cos(phi * 2.0 + 0.7854)), 6.0) * exp(-pow((t - 0.10) / 0.07, 2.0));',
-      '  col += vec3(0.90, 0.82, 0.95) * (nuc * 0.4 + cr4 * 0.30) * face;',
-      /* faint coronal muscle rings near the margin */
+      '  col += vec3(0.62, 0.72, 0.92) * can * face * 0.28;',
+      /* gastric nucleus + four-pouch cross, floating on the organ plane */
+      '  float nuc = exp(-rr * rr / 0.010);',
+      '  float phc = atan(q.y, q.x);',
+      '  float cr4 = pow(abs(cos(phc * 2.0 + 0.7854)), 6.0) * exp(-pow((rr - 0.10) / 0.07, 2.0));',
+      '  col += vec3(0.90, 0.82, 0.95) * (nuc * 0.40 + cr4 * 0.28) * face * organW;',
+      /* coronal muscle rings near the margin */
       '  float mus = pow(abs(sin(t * 44.0)), 6.0) * smoothstep(0.55, 0.9, t);',
-      '  col += vec3(0.45, 0.40, 0.70) * mus * 0.06 * facing;',
+      '  col += vec3(0.45, 0.40, 0.70) * mus * 0.06;',
       /* marginal nerve ring + rhopalia specks in the lappet notches */
       '  float mring = exp(-pow((t - 0.965) / 0.02, 2.0));',
-      '  col += vec3(0.40, 0.62, 0.82) * mring * 0.14 * facing;',
+      '  col += vec3(0.40, 0.62, 0.82) * mring * 0.14;',
       '  float rho = pow(0.5 - 0.5 * cos(8.0 * phi), 24.0) * mring;',
-      '  col += vec3(0.80, 0.90, 1.0) * rho * 0.22 * facing;',
+      '  col += vec3(0.80, 0.90, 1.0) * rho * 0.25;',
       /* translucent body: alpha dims what is behind (premultiplied over) */
-      '  float al = 0.16 + 0.20 * (1.0 - fres) + 0.18 * gon * face;',
-      '  col *= facing;',
+      '  float al = (0.12 + 0.18 * ndw + 0.15 * gon * face * u_pass) * dens;',
+      '  al *= mix(0.38, 1.0, u_pass);',        /* the far wall barely occludes */
+      '  col *= mix(0.72, 1.0, u_pass);',
+      /* far-wall margin dissolve: the back wall melts to nothing toward its
+         rim so no creased polygon edge ever reads through the near glass */
+      '  float bkFade = 1.0 - (1.0 - u_pass) * smoothstep(0.68, 0.96, t);',
+      '  col *= bkFade;',
+      '  al *= bkFade;',
       '  col *= u_glow * v_dim;',
-      '  al = clamp(al, 0.0, 0.6) * v_dim * (facing < 1.0 ? 0.8 : 1.0);',
+      '  col = tonemap(col);',
+      '  al = clamp(al, 0.0, 0.62) * v_dim;',
       '  gl_FragColor = vec4(col, al);',
       '}'
     ].join('\n');
@@ -1117,22 +1251,44 @@
       '  vec3 col;',
       '  float a;',
       '  if (v_aux.w < 0.5) {',
-      /* fine marginal tentacle: soft round core, fades toward the tip */
+      /* fine marginal tentacle: soft round core + wet specular filament;
+         nematocyst beads swell/shimmer down the strand (per-chain phase) */
       '    float prof = 1.0 - vv * vv;',
-      '    a = prof * prof * (1.0 - 0.78 * u) * br * 0.5;',
+      '    float bead = 0.82 + 0.30 * sin(u * 46.0 - u_wob * 2.0 + v_aux.w * 500.0);',
+      '    a = prof * prof * (1.0 - 0.78 * u) * br * 0.42 * bead;',
+      '    a += pow(prof, 8.0) * (1.0 - 0.6 * u) * br * 0.30;',
+      '    a *= 0.45 + 0.55 * smoothstep(0.0, 0.18, u);',  /* roots melt into the rim */
       /* violet root -> faint cyan tip: depth cue without breaking rim discipline */
       '    col = mix(vec3(0.60, 0.48, 0.84), vec3(0.22, 0.56, 0.80), smoothstep(0.35, 1.0, u) * 0.65);',
+      '    col = mix(col, vec3(0.82, 0.88, 1.0), pow(prof, 8.0) * 0.5);',
+      /* brighter wet core line: the strand's inner thread stays waterlit */
+      '    col += vec3(0.26, 0.30, 0.42) * pow(prof, 6.0) * (1.0 - 0.55 * u) * 0.7;',
       '  } else {',
-      /* frilled oral arm: soft curtain, ruffle brightens in traveling folds */
+      /* frilled oral arm: soft curtain, ruffle brightens in traveling folds;
+         third lace octave + lit hem line give the frill legible structure */
       '    float armPh = (v_aux.w - 1.0) * 300.0;',
       '    float edge = abs(vv);',
       '    float fold = 0.5 + 0.5 * sin(u * 21.0 + u_wob + armPh);',
       '    float fold2 = 0.5 + 0.5 * sin(u * 9.0 - u_wob + armPh * 1.7 + 2.1);',
+      '    float fold3 = 0.5 + 0.5 * sin(u * 33.0 + u_wob + armPh * 2.3);',
+      /* integer u_wob multiplier: wobPh wraps at 2pi, so non-integer rates
+         would pop the lace phase at every wrap (de-sync comes from armPh) */
+      '    float lace = 0.5 + 0.5 * sin(u * 47.0 - u_wob * 2.0 + armPh * 3.1);',
       '    float body2 = (1.0 - edge * edge);',
-      '    float hem = smoothstep(1.0, 0.55, edge + 0.30 * fold);',
-      '    a = body2 * hem * (0.34 + 0.48 * fold * fold2 + 0.26 * fold2)',
-      '      * (1.0 - 0.42 * u) * (1.0 - 0.85 * smoothstep(0.7, 1.0, u)) * br * 0.52;',
+      '    float hem = smoothstep(1.0, 0.55, edge + 0.26 * fold + 0.10 * fold3 + 0.05 * lace);',
+      '    float hemGlow = smoothstep(0.45, 0.9, edge) * hem;',
+      '    a = body2 * hem * (0.22 + 0.50 * fold * fold2 + 0.20 * fold2 + 0.14 * fold3 + 0.14 * lace * fold)',
+      '      * (1.0 - 0.42 * u) * (1.0 - smoothstep(0.66, 0.98, u)) * br * 0.62;',
+      /* edge masks: the curtain must never end on a razor-straight quad edge —
+         roots melt into the manubrium, tips dissolve to water, sides feather
+         beyond the body2 profile (kills the hard silhouettes seen through
+         the bell), and the result is clamped so it can never darken */
+      '    a *= smoothstep(0.0, 0.16, u);',
+      '    a *= smoothstep(1.0, 0.72, edge);',
+      '    a = max(a, 0.0);',
       '    col = mix(vec3(0.62, 0.50, 0.82), vec3(0.78, 0.64, 0.88), fold);',
+      /* the ruffled hem catches the key light */
+      '    col += vec3(0.52, 0.44, 0.68) * hemGlow * lace * 0.55;',
       '  }',
       '  gl_FragColor = vec4(col * a, 1.0);',
       '}'
@@ -1255,6 +1411,150 @@
       '}'
     ].join('\n');
 
+    /* layered hero aura + aureole + local background darkening in ONE
+       billboard draw: rgb adds three nested glow lobes plus the Ascension
+       glory (soft white-gold corona ring with slow animated rays) behind
+       the bell, alpha (premultiplied-over blending) pulls the water down
+       behind the bell for contrast staging */
+    var AURA_FS = [
+      'precision mediump float;',
+      'varying vec2 v_q;',
+      'uniform float u_int;',
+      'uniform float u_pulse;',
+      'uniform float u_floor;',
+      'uniform float u_ray;',   /* bounded slow ray-rotation phase */
+      'uniform vec3 u_dimD;',   /* dim band in DEVICE px (left, right, feather) */
+      'float dimBand(float px) {',
+      '  if (u_dimD.y < u_dimD.x) { return 1.0; }',
+      '  float t = 0.0;',
+      '  if (px < u_dimD.x) { t = (u_dimD.x - px) / u_dimD.z; }',
+      '  else if (px > u_dimD.y) { t = (px - u_dimD.y) / u_dimD.z; }',
+      '  t = clamp(t, 0.0, 1.0);',
+      '  t = t * t * (3.0 - 2.0 * t);',
+      '  return 0.35 + 0.65 * t;',
+      '}',
+      'void main() {',
+      '  float r = length(v_q);',
+      '  float dim = max(dimBand(gl_FragCoord.x), u_floor);',
+      /* local background darkening, faded to zero before the quad boundary
+         (max(|x|,|y|) tracks the square edge) so the alpha cutoff never
+         paints a vertical seam in the water beside her */
+      '  float dk = exp(-r * r * 1.2) * 0.42'
+        + ' * (1.0 - smoothstep(0.70, 0.98, max(abs(v_q.x), abs(v_q.y))));',
+      '  float br = u_int * (0.85 + 0.35 * u_pulse);',
+      '  vec3 col = vec3(0.42, 0.30, 0.62) * exp(-r * r * 22.0) * 0.26',
+      '           + vec3(0.24, 0.40, 0.62) * exp(-r * r * 7.0) * 0.11',
+      '           + vec3(0.10, 0.28, 0.33) * exp(-r * r * 2.6) * 0.05;',
+      /* the aureole: a diffuse glory behind the bell — soft radiant ring,
+         faint slow counter-rotating rays, white-gold, never a hard halo */
+      '  float ang = atan(v_q.y, v_q.x + 1e-5);',  /* atan(0,0) is undefined */
+      '  float ring = exp(-pow((r - 0.42) / 0.21, 2.0));',
+      '  float rays = 0.42 + 0.34 * sin(ang * 10.0 + u_ray * 2.0)',
+      '             + 0.24 * sin(ang * 5.0 - u_ray * 3.0 + 1.7);',
+      '  float glory = ring * rays + exp(-pow((r - 0.26) / 0.20, 2.0)) * 0.40;',
+      '  col += vec3(0.97, 0.88, 0.68) * glory * 0.32;',
+      '  gl_FragColor = vec4(col * br * dim, dk);',
+      '}'
+    ].join('\n');
+
+    /* ascending star-motes: celestial dust RISING around the Medusa (the
+       inverse of marine snow), dense near her, sparse far away. The whole
+       population is one static instance buffer; rise/drift/twinkle are
+       bounded functions of u_time. Unlike the silhouettes, u_time here is
+       BOUNDED (timeS % MOTE_T) — all rates are whole cycles per MOTE_T. */
+    var MOTE_VS = [
+      'attribute vec2 a_q;',
+      'attribute vec4 a_i0;',   /* ox, oy0 (rise offset), oz, size */
+      'attribute vec4 a_i1;',   /* rise rate, seed, twinkle rate, alpha */
+      'uniform mat4 u_vp;',
+      'uniform vec3 u_right;',
+      'uniform vec3 u_up;',
+      'uniform vec3 u_hpos;',
+      'uniform float u_time;',
+      'uniform float u_hs;',
+      'uniform float u_act;',
+      /* click ripple: brightness travels through nearby motes (xyz origin,
+         w expanding radius; u_ripA amplitude — all bounded, CPU-driven) */
+      'uniform vec4 u_rip;',
+      'uniform float u_ripA;',
+      'uniform vec2 u_dim;',
+      'uniform float u_vpw;',
+      'uniform float u_floor;',
+      'varying vec2 v_q;',
+      'varying float v_a;',
+      DIM_GLSL,
+      'void main() {',
+      '  float span = 6.5;',
+      '  float yy = mod(a_i0.y + u_time * a_i1.x, span);',
+      '  float lu = yy / span;',
+      /* she attracts the light: motes drift toward her axis as they rise */
+      '  float cvg = 1.0 - 0.30 * lu;',
+      '  vec3 base = u_hpos + vec3(a_i0.x * u_hs * cvg, yy - span * 0.42, a_i0.z * u_hs * cvg);',
+      /* sway rate = 2pi*48/MOTE_T (48 whole cycles per 600 s period) so
+         the u_time wrap at MOTE_T is seamless */
+      '  base.x += sin(u_time * 0.50265482 + a_i1.y) * 0.14 * u_hs;',
+      '  float tw = 0.35 + 0.65 * (0.5 + 0.5 * sin(u_time * a_i1.z + a_i1.y * 5.0));',
+      '  tw *= tw;',
+      /* fade in low, fade out high: no popping at the wrap seam */
+      '  float lf = smoothstep(0.0, 0.12, lu) * (1.0 - smoothstep(0.80, 1.0, lu));',
+      '  float rd = distance(base, u_rip.xyz);',
+      '  float rip = u_ripA * exp(-pow((rd - u_rip.w) * 0.7, 2.0));',
+      '  vec3 world = base + (u_right * a_q.x + u_up * a_q.y) * (a_i0.w * u_hs);',
+      '  gl_Position = u_vp * vec4(world, 1.0);',
+      '  vec4 cc = u_vp * vec4(base, 1.0);',
+      '  float px = (cc.x / max(cc.w, 0.0001) * 0.5 + 0.5) * u_vpw;',
+      '  v_a = a_i1.w * tw * lf * (0.78 + 0.44 * u_act) * (1.0 + 2.4 * rip)',
+      '      * max(dimBand(px), u_floor);',
+      '  v_q = a_q;',
+      '}'
+    ].join('\n');
+
+    var MOTE_FS = [
+      'precision mediump float;',
+      'varying vec2 v_q;',
+      'varying float v_a;',
+      'void main() {',
+      '  float r = length(v_q);',
+      '  float core = exp(-r * r * 9.0);',
+      '  float cr = (exp(-abs(v_q.x) * 8.0) + exp(-abs(v_q.y) * 8.0)) * exp(-r * r * 2.2) * 0.30;',
+      '  float a = (core + cr) * v_a;',
+      '  gl_FragColor = vec4(vec3(0.95, 0.89, 0.75) * a, 1.0);',
+      '}'
+    ].join('\n');
+
+    /* apex star-core: the bell's nucleus elevated to a star-like point with
+       a subtle 4-point sparkle, drawn over the glass so it reads as a star */
+    var STAR_FS = [
+      'precision mediump float;',
+      'varying vec2 v_q;',
+      'uniform float u_int;',
+      'uniform float u_tw;',    /* bounded twinkle phase */
+      'uniform float u_floor;',
+      'uniform vec3 u_dimD;',   /* dim band in DEVICE px (left, right, feather) */
+      'float dimBand(float px) {',
+      '  if (u_dimD.y < u_dimD.x) { return 1.0; }',
+      '  float t = 0.0;',
+      '  if (px < u_dimD.x) { t = (u_dimD.x - px) / u_dimD.z; }',
+      '  else if (px > u_dimD.y) { t = (px - u_dimD.y) / u_dimD.z; }',
+      '  t = clamp(t, 0.0, 1.0);',
+      '  t = t * t * (3.0 - 2.0 * t);',
+      '  return 0.35 + 0.65 * t;',
+      '}',
+      'void main() {',
+      '  float r = length(v_q);',
+      '  float core = exp(-r * r * 42.0) * 1.5;',
+      '  float w1 = 0.85 + 0.15 * sin(u_tw);',
+      '  float rays = exp(-abs(v_q.x) * 30.0) * exp(-abs(v_q.y) * 4.5)',
+      '             + exp(-abs(v_q.y) * 30.0) * exp(-abs(v_q.x) * 4.5);',
+      '  rays *= w1 * smoothstep(1.0, 0.2, r) * 0.55;',
+      '  float halo = exp(-r * r * 6.0) * 0.22;',
+      '  float dim = max(dimBand(gl_FragCoord.x), u_floor);',
+      '  float a = (core + rays + halo) * u_int * dim;',
+      '  vec3 gold = vec3(0.95, 0.89, 0.75);',
+      '  gl_FragColor = vec4(mix(gold, vec3(1.0, 0.98, 0.92), core) * a, 1.0);',
+      '}'
+    ].join('\n');
+
     /* ----------------------------------------------------------- GL helpers */
     function compileShader(type, src) {
       var s = gl.createShader(type);
@@ -1362,9 +1662,9 @@
        caller can route to the 2D fallback instead of a black screen. */
     function initGL() {
       progBack = makeProg(BACK_VS, BACK_FS, { a_p: 0 },
-        ['u_shaft', 'u_activity', 'u_aspect']);
+        ['u_shaft', 'u_activity', 'u_aspect', 'u_hero']);
       progBell = makeProg(BELL_VS, BELL_FS, { a_tp: 0 },
-        ['u_vp', 'u_pos', 'u_m', 'u_pw', 'u_dim', 'u_vpw', 'u_floor', 'u_cam', 'u_glow', 'u_sg', 'u_ir', 'u_gp']);
+        ['u_vp', 'u_pos', 'u_m', 'u_pw', 'u_dim', 'u_vpw', 'u_floor', 'u_cam', 'u_glow', 'u_sg', 'u_ir', 'u_gp', 'u_fl', 'u_pass', 'u_mi']);
       progRib = makeProg(RIB_VS, RIB_FS, { a_pos: 0, a_aux: 1 },
         ['u_vp', 'u_dim', 'u_vpw', 'u_floor', 'u_wob']);
       progSil = makeProg(SIL_VS, SIL_FS, { a_tp: 0, a_i0: 2, a_i1: 3 },
@@ -1373,7 +1673,15 @@
         ['u_vp', 'u_right', 'u_up', 'u_dimD']);
       progGlow = makeProg(GLOW_VS, GLOW_FS, { a_q: 0 },
         ['u_vp', 'u_pos', 'u_right', 'u_up', 'u_size', 'u_color', 'u_int']);
-      if (!progBack || !progBell || !progRib || !progSil || !progShell || !progGlow) { return false; }
+      progAura = makeProg(GLOW_VS, AURA_FS, { a_q: 0 },
+        ['u_vp', 'u_pos', 'u_right', 'u_up', 'u_size', 'u_int', 'u_pulse', 'u_floor', 'u_dimD', 'u_ray']);
+      progMote = makeProg(MOTE_VS, MOTE_FS, { a_q: 0, a_i0: 2, a_i1: 3 },
+        ['u_vp', 'u_right', 'u_up', 'u_hpos', 'u_time', 'u_hs', 'u_act',
+         'u_rip', 'u_ripA', 'u_dim', 'u_vpw', 'u_floor']);
+      progStar = makeProg(GLOW_VS, STAR_FS, { a_q: 0 },
+        ['u_vp', 'u_pos', 'u_right', 'u_up', 'u_size', 'u_int', 'u_tw', 'u_floor', 'u_dimD']);
+      if (!progBack || !progBell || !progRib || !progSil || !progShell || !progGlow || !progAura ||
+          !progMote || !progStar) { return false; }
 
       var bell = buildBellGrid();
       var ribIdx = buildRibIndex();
@@ -1384,6 +1692,7 @@
       bellIBuf = staticBuf(gl.ELEMENT_ARRAY_BUFFER, bell.i);
       ribIBuf = staticBuf(gl.ELEMENT_ARRAY_BUFFER, ribIdx);
       silBuf = staticBuf(gl.ARRAY_BUFFER, silF);
+      moteBuf = staticBuf(gl.ARRAY_BUFFER, moteF);
       ribVBuf = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, ribVBuf);
       gl.bufferData(gl.ARRAY_BUFFER, ribF.byteLength, gl.DYNAMIC_DRAW);
@@ -1463,6 +1772,9 @@
       var lobe = Math.cos(8 * phi);
       r += 0.062 * lobe * r;
       y -= 0.075 * (0.5 + 0.5 * lobe);
+      /* lappet flutter mirror (t=1 -> sc^3=1): roots stay glued to the rim */
+      y += 0.015 * Math.sin(24 * phi + flutPh + 2 * lobe);
+      r += 0.006 * Math.sin(24 * phi - flutPh + 1.1);
       r *= 1 - 0.22 * ctr;
       y -= 0.13 * ctr;
       mgX = r * Math.cos(phi); mgY = y; mgZ = r * Math.sin(phi);
@@ -1476,6 +1788,10 @@
       m9[0] = cz * s; m9[1] = sz * s; m9[2] = 0;
       m9[3] = -sz * cx * s; m9[4] = cz * cx * s; m9[5] = sx * s;
       m9[6] = sz * sx * s; m9[7] = -cz * sx * s; m9[8] = cx * s;
+      var inv = 1 / (s * s);
+      m9i[0] = m9[0] * inv; m9i[1] = m9[3] * inv; m9i[2] = m9[6] * inv;
+      m9i[3] = m9[1] * inv; m9i[4] = m9[4] * inv; m9i[5] = m9[7] * inv;
+      m9i[6] = m9[2] * inv; m9i[7] = m9[5] * inv; m9i[8] = m9[8] * inv;
     }
 
     function setupHero() {
@@ -1507,6 +1823,7 @@
         heroScale = Math.max(1.3, Math.min(2.15, (avail * 0.72) / (2 * pxPerWorld)));
         heroFloor = 0;
       }
+      moteCount = mobile ? 40 : N_MOTE;   /* fewer star-motes on small screens */
       var c;
       for (c = 0; c < CHAINS; c++) {
         var vary = chKind[c] === 0 ? 0.84 + 0.32 * (0.5 + 0.5 * Math.sin(c * 12.9898)) : 1;
@@ -1652,14 +1969,17 @@
           var u = k / (len - 1);
           var w, kv;
           if (kind === 0) {
-            w = heroScale * (0.030 - 0.020 * u);
-            kv = 0;
+            /* subtle beaded swell along the strand (thin ribbons stay thin) */
+            w = heroScale * (0.030 - 0.020 * u + 0.0045 * Math.sin(u * 24.0 + chSeed[c]));
+            kv = c * 0.002;   /* per-chain bead phase, still < 0.5 (tentacle branch) */
           } else {
             w = heroScale * 0.135 * (1 - 0.42 * u) *
               (1 + 0.36 * Math.sin(u * 12.0 + timeS * 1.5 + c * 1.9));
             kv = 1 + (c - CH_TENT) * 0.02;   /* de-syncs each arm's ruffle */
           }
-          var br = heroBright * (kind === 0 ? 1.0 : 1.12);
+          var br = heroBright * (kind === 0
+            ? 0.80 + 0.36 * (0.5 + 0.5 * Math.sin(c * 5.7 + 1.3))
+            : 1.30);
           ribF[o++] = x - sx * w; ribF[o++] = y - sy * w; ribF[o++] = z - sz * w;
           ribF[o++] = u; ribF[o++] = -1; ribF[o++] = br; ribF[o++] = kv;
           ribF[o++] = x + sx * w; ribF[o++] = y + sy * w; ribF[o++] = z + sz * w;
@@ -1698,6 +2018,13 @@
       if (pulsePhase > TWO_PI) { pulsePhase -= TWO_PI; }
       flare *= Math.max(0, 1 - dt * 1.8);
       kink *= Math.max(0, 1 - dt * 1.9);
+      /* click ripple sweeping the star-motes: radius expands, light decays
+         (both bounded — the radius freezes once the amplitude dies) */
+      if (ripA > 0) {
+        ripR += 14 * dt;
+        ripA *= Math.exp(-dt * 1.9);
+        if (ripA < 0.01) { ripA = 0; ripR = 0; }
+      }
       /* sample the traveling contraction wave at the gonad ring (t~=0.4,
          same math as bellPt's wx = u_pw - t * 2.2) — the clover breathes
          with the bell kick */
@@ -1730,9 +2057,27 @@
       shaftGlow = 0.5 + 0.25 * Math.sin(timeS * 0.31) + 0.25 * Math.sin(timeS * 0.23 + 2.1);
       iridPh = (timeS * 0.6) % TWO_PI;
       wobPh = (timeS * 1.6) % TWO_PI;
+      flutPh = (timeS * 4.2) % TWO_PI;
+      rayPh = (timeS * 0.23) % TWO_PI;
+      starTw = (timeS * 2.7) % TWO_PI;
       var hdx = heroPX - eyeX, hdy = heroPY - eyeY, hdz = HERO_Z - eyeZ;
       var hDist = Math.sqrt(hdx * hdx + hdy * hdy + hdz * hdz);
       heroBright = Math.exp(-hDist * FOG_D) * (0.9 + 0.25 * activity) * (1 + 0.5 * Math.min(flare, 1.5));
+      /* apex star: gentle multi-sine twinkle; the sonar bloom makes it flare
+         hard, then it settles as the flare energy decays */
+      starInt = heroBright * (0.42 + 0.10 * Math.sin(timeS * 2.1) + 0.07 * Math.sin(timeS * 3.7)) *
+        (1 + 1.05 * Math.min(flare, 1.5));
+
+      /* contrast staging: project the hero into backdrop uv space so the
+         water directly behind the creature runs a stop darker (scalar math
+         only — no allocation); wider + stronger than the aura's own channel */
+      var hcw = mVP[3] * heroPX + mVP[7] * heroPY + mVP[11] * HERO_Z + mVP[15];
+      if (hcw > 0.001) {
+        heroU = (mVP[0] * heroPX + mVP[4] * heroPY + mVP[8] * HERO_Z + mVP[12]) / hcw * 0.5 + 0.5;
+        heroV = (mVP[1] * heroPX + mVP[5] * heroPY + mVP[9] * HERO_Z + mVP[13]) / hcw * 0.5 + 0.5;
+      }
+      heroR = heroScale * 1.7 / (2 * tanY * hDist);
+      heroDk = 0.38 * Math.min(1, heroBright + 0.3);
 
       heroVerlet(dt);
       buildRibbons();
@@ -1777,8 +2122,9 @@
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
-    /* <=7 draw calls/frame: backdrop, cursor glow (cond), silhouettes,
-       ribbons, bell, shells (cond), flash (cond) */
+    /* <=11 draw calls/frame (Ascension budget <=12): backdrop, cursor glow
+       (cond), silhouettes, aura+aureole, star-motes, ribbons, bell back wall,
+       bell front wall, apex star, shells (cond), flash (cond) */
     function draw() {
       gl.viewport(0, 0, canvas.width, canvas.height);
 
@@ -1790,6 +2136,7 @@
         Math.sin(timeS * 0.27 + 4.2), Math.sin(timeS * 0.19 + 1.1));
       gl.uniform1f(progBack.u_activity, activity);
       gl.uniform1f(progBack.u_aspect, aspect);
+      gl.uniform4f(progBack.u_hero, heroU, heroV, heroR, heroDk);
       bindQuad();
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
@@ -1826,6 +2173,48 @@
       drawElemInst(bellIdxCount, N_SIL);
       unbindInstances();
 
+      /* hero aura + contrast staging: glow lobes add, alpha darkens behind */
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.useProgram(progAura.p);
+      gl.uniformMatrix4fv(progAura.u_vp, false, mVP);
+      gl.uniform3f(progAura.u_pos, heroPX, heroPY + 0.2 * heroScale, HERO_Z);
+      gl.uniform3f(progAura.u_right, rgt[0], rgt[1], rgt[2]);
+      gl.uniform3f(progAura.u_up, upv[0], upv[1], upv[2]);
+      gl.uniform1f(progAura.u_size, heroScale * 3.1);
+      gl.uniform1f(progAura.u_int, heroBright);
+      gl.uniform1f(progAura.u_pulse, gonadPulse);
+      gl.uniform1f(progAura.u_floor, heroFloor);
+      gl.uniform3f(progAura.u_dimD, dimL * DPR, dimR * DPR, 120 * DPR);
+      gl.uniform1f(progAura.u_ray, rayPh);
+      bindQuad();
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.blendFunc(gl.ONE, gl.ONE);
+
+      /* ascending star-motes (one instanced draw, static instance buffer) */
+      gl.useProgram(progMote.p);
+      gl.uniformMatrix4fv(progMote.u_vp, false, mVP);
+      gl.uniform3f(progMote.u_right, rgt[0], rgt[1], rgt[2]);
+      gl.uniform3f(progMote.u_up, upv[0], upv[1], upv[2]);
+      gl.uniform3f(progMote.u_hpos, heroPX, heroPY, HERO_Z);
+      gl.uniform1f(progMote.u_time, timeS % MOTE_T);
+      gl.uniform1f(progMote.u_hs, heroScale);
+      gl.uniform1f(progMote.u_act, activity);
+      gl.uniform4f(progMote.u_rip, ripX, ripY, ripZ, ripR);
+      gl.uniform1f(progMote.u_ripA, ripA);
+      gl.uniform2f(progMote.u_dim, dimL, dimR);
+      gl.uniform1f(progMote.u_vpw, W);
+      gl.uniform1f(progMote.u_floor, heroFloor);
+      bindQuad();
+      gl.bindBuffer(gl.ARRAY_BUFFER, moteBuf);
+      gl.enableVertexAttribArray(2);
+      gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, 0);
+      setDiv(2, 1);
+      gl.enableVertexAttribArray(3);
+      gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 32, 16);
+      setDiv(3, 1);
+      drawArrInst(4, moteCount);
+      unbindInstances();
+
       /* tentacles + oral arms: ONE dynamic upload, ONE draw */
       gl.useProgram(progRib.p);
       gl.uniformMatrix4fv(progRib.u_vp, false, mVP);
@@ -1860,13 +2249,37 @@
       gl.uniform1f(progBell.u_sg, shaftGlow);
       gl.uniform1f(progBell.u_ir, iridPh);
       gl.uniform1f(progBell.u_gp, gonadPulse);
+      gl.uniform1f(progBell.u_fl, flutPh);
+      gl.uniformMatrix3fv(progBell.u_mi, false, m9i);
       gl.bindBuffer(gl.ARRAY_BUFFER, bellVBuf);
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
       setDiv(0, 0);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bellIBuf);
+      /* two-pass translucency: the far wall first, then the glassy near wall
+         over it — the eye sees the inside of the back of the bell THROUGH
+         the front, which is what makes it read as a volume of living jelly */
+      gl.uniform1f(progBell.u_pass, 0);
+      gl.drawElements(gl.TRIANGLES, bellIdxCount, gl.UNSIGNED_SHORT, 0);
+      gl.uniform1f(progBell.u_pass, 1);
       gl.drawElements(gl.TRIANGLES, bellIdxCount, gl.UNSIGNED_SHORT, 0);
       gl.blendFunc(gl.ONE, gl.ONE);
+
+      /* apex star-core: her nucleus elevated to a 4-point star (scalar math
+         only — billboard at the upper interior of the bell, over the glass) */
+      gl.useProgram(progStar.p);
+      gl.uniformMatrix4fv(progStar.u_vp, false, mVP);
+      gl.uniform3f(progStar.u_pos,
+        heroPX + m9[3] * 0.34, heroPY + m9[4] * 0.34, HERO_Z + m9[5] * 0.34);
+      gl.uniform3f(progStar.u_right, rgt[0], rgt[1], rgt[2]);
+      gl.uniform3f(progStar.u_up, upv[0], upv[1], upv[2]);
+      gl.uniform1f(progStar.u_size, heroScale * (0.52 + 0.20 * Math.min(flare, 1.5)));
+      gl.uniform1f(progStar.u_int, starInt);
+      gl.uniform1f(progStar.u_tw, starTw);
+      gl.uniform1f(progStar.u_floor, heroFloor);
+      gl.uniform3f(progStar.u_dimD, dimL * DPR, dimR * DPR, 120 * DPR);
+      bindQuad();
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
       /* shockwave shells (one instanced draw, <= 6 quads) */
       if (shellCount > 0) {
@@ -2092,6 +2505,11 @@
         flash.x = px; flash.y = py; flash.z = pz;
         flash.t = 0;
       }
+
+      /* the light answers first: a ripple of brightness through nearby motes */
+      ripX = px; ripY = py; ripZ = pz;
+      ripR = 0.6;
+      ripA = Math.min(1, 0.4 + 0.28 * Math.min(s, 3));
 
       /* the Medusa answers: spring impulse + brightness flare + tentacle whip */
       var sc = Math.min(s, 3);
