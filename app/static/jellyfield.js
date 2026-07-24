@@ -775,8 +775,13 @@
     var N_SIL = 6;                   /* distant silhouettes */
     var CH_TENT = 32, TENT_NODES = 24;    /* marginal tentacles (verlet) */
     var CH_ARM = 4, ARM_NODES = 16;       /* frilled oral arms (verlet) */
-    var CHAINS = CH_TENT + CH_ARM;
-    var TOTAL_NODES = CH_TENT * TENT_NODES + CH_ARM * ARM_NODES;  /* 832 */
+    /* Seraph: 8 ribbon-wings (4 per side) — the SAME preallocated node arrays,
+       the SAME ribbon draw call, kind 2. Diablo's Angiris wings are not
+       feathers: they are streamers of pure light held in a wing silhouette. */
+    var CH_WING = 10, WING_NODES = 30;
+    var CHAINS = CH_TENT + CH_ARM + CH_WING;
+    var TOTAL_NODES = CH_TENT * TENT_NODES + CH_ARM * ARM_NODES
+      + CH_WING * WING_NODES;             /* 832 + 300 = 1132 */
     var TENT_LEN = 1.55, ARM_LEN = 1.05;  /* in bell-local units */
     var BREATH = 4.5;                /* seconds per contraction cycle */
     var TWO_PI = 6.283185307179586;
@@ -818,6 +823,10 @@
     var heroX = 0, heroY = 0, heroVX = 0, heroVY = 0;   /* anchor spring */
     var heroPX = 0, heroPY = 0;                         /* drawn position (with bob) */
     var heroScale = 2.2, heroFloor = 0, heroInited = false;
+    /* 0 = the fan sweeps out and up at full spread; 1 = it rotates upright
+       (High Heavens verticality) so the span fits a shallow band of water.
+       Set by the layout solve in setupHero, read by wingUpdate. */
+    var wingFold = 0;
     var anchorPxX = 0, anchorPxY = 0;
     var pulsePhase = 0;              /* traveling contraction wave phase */
     var leanX = 0, leanZ = 0;        /* bell lean (radians) */
@@ -826,6 +835,8 @@
     var gonadPulse = 0;              /* contraction wave sampled at the gonad ring */
     var heroBright = 0.6, shaftGlow = 0.5, iridPh = 0, wobPh = 0, flutPh = 0;
     var rayPh = 0, starTw = 0, starInt = 0;   /* Ascension: bounded phases */
+    var wingFlare = 0;               /* Seraph: wings snap open on the sonar */
+    var crownPh = 0;                 /* bounded crown-rotation phase */
     var ripX = 0, ripY = 0, ripZ = 0, ripR = 0, ripA = 0;  /* mote click ripple */
     var heroU = 0.5, heroV = 0.5, heroR = 0.3, heroDk = 0;  /* backdrop contrast pocket */
     var m9 = new Float32Array(9);    /* bell model rot*scale, column-major */
@@ -838,6 +849,12 @@
     var chOff = new Int32Array(CHAINS), chLen = new Int32Array(CHAINS);
     var chPhi = new Float32Array(CHAINS), chSeg = new Float32Array(CHAINS);
     var chKind = new Uint8Array(CHAINS), chSeed = new Float32Array(CHAINS);
+    /* wing tables (preallocated, per-wing constants: side, root ring, root
+       azimuth spread, start/end sweep angle, length scale, stream phase) */
+    var wgSide = new Float32Array(CH_WING), wgRootT = new Float32Array(CH_WING);
+    var wgDphi = new Float32Array(CH_WING), wgTh0 = new Float32Array(CH_WING);
+    var wgTh1 = new Float32Array(CH_WING), wgLen = new Float32Array(CH_WING);
+    var wgPh = new Float32Array(CH_WING), wgBr = new Float32Array(CH_WING);
     (function () {
       var off = 0, c;
       for (c = 0; c < CHAINS; c++) {
@@ -846,12 +863,41 @@
           chLen[c] = TENT_NODES; chKind[c] = 0;
           chPhi[c] = (c / CH_TENT) * TWO_PI + 0.13 + 0.06 * Math.sin(c * 7.3);
           off += TENT_NODES;
-        } else {
+        } else if (c < CH_TENT + CH_ARM) {
           chLen[c] = ARM_NODES; chKind[c] = 1;
           chPhi[c] = 0.7853982 + (c - CH_TENT) * 1.5707963;
           off += ARM_NODES;
+        } else {
+          chLen[c] = WING_NODES; chKind[c] = 2;
+          chPhi[c] = 0;
+          off += WING_NODES;
         }
         chSeed[c] = c * 2.399;
+      }
+      /* TYRAEL: broad, symmetric, architectural. Four ribbons per side rise
+         from the shoulder of the bell — the top pair nearly vertical (High
+         Heavens verticality), the bottom pair splayed wide for the span.
+         Mirrored exactly across x so the silhouette reads as WINGS. */
+      /* a WING, not a sunburst: ribbon 0 is the long leading edge sweeping
+         out and up to the wing tip; 1..4 are progressively shorter, lower
+         trailing primaries, the last streaming out almost level. */
+      var rootT = [0.50, 0.56, 0.63, 0.70, 0.77];
+      var dphi = [0.10, -0.06, -0.22, -0.38, -0.54];
+      var th0 = [0.88, 0.72, 0.54, 0.36, 0.16];
+      var th1 = [1.42, 1.14, 0.86, 0.55, 0.10];
+      var lens = [1.66, 1.60, 1.47, 1.26, 1.12];
+      var w, s;
+      for (w = 0; w < CH_WING; w++) {
+        s = w < 5 ? 1 : -1;
+        var i = w % 5;
+        wgSide[w] = s;
+        wgRootT[w] = rootT[i];
+        wgDphi[w] = dphi[i];
+        wgTh0[w] = th0[i];
+        wgTh1[w] = th1[i];
+        wgLen[w] = lens[i];
+        wgPh[w] = i * 1.31 + (s > 0 ? 0 : 0.42);   /* the two wings breathe apart */
+        wgBr[w] = [1.38, 1.18, 1.05, 0.95, 0.86][i];   /* the leading edge burns */
       }
     })();
 
@@ -978,6 +1024,14 @@
       /* white-gold grade lives in the LIGHT only (never the flesh) */
       '  col += vec3(0.95, 0.87, 0.68) * (sg * surge);',
       '  col += vec3(0.55, 0.72, 0.90) * (sc * surge);',
+      /* THE COLUMN (High Heavens architecture is all vertical light): a hard
+         narrow shaft standing on her crown and running clean to the surface —
+         a nave, not a glow. It reads as authority: she is at its foot. */
+      '  float cw = abs((v_uv.x - u_hero.x) * u_aspect);',
+      '  float colm = exp(-pow(cw / 0.030, 2.0)) * 0.85 + exp(-pow(cw / 0.105, 2.0)) * 0.30;',
+      '  colm *= smoothstep(u_hero.y - 0.02, u_hero.y + 0.26, v_uv.y);',
+      '  colm *= 0.55 + 0.45 * u_shaft.x;',
+      '  col += vec3(0.98, 0.91, 0.74) * colm * 0.150 * surge;',
       '  col += vec3(0.5, 0.85, 1.0) * (u_activity * 0.05);',
       /* local darkening behind the hero (slightly elongated down the drape) */
       '  vec2 hd = vec2((v_uv.x - u_hero.x) * u_aspect, (v_uv.y - u_hero.y) * 0.8);',
@@ -986,6 +1040,25 @@
       /* radial falloff so the corners breathe dark, like the 2D backdrop */
       '  vec2 cc = vec2((v_uv.x - 0.5) * u_aspect, v_uv.y - 0.45);',
       '  col *= 1.0 - 0.35 * smoothstep(0.35, 1.15, length(cc));',
+      /* THE MANDORLA: a thin gold annulus standing BEHIND her at ~1.7 bell
+         radii — the icon-grade ring of rank the Angiris are painted inside.
+         Backplane geometry only, so it costs no draw call; setActivity drives
+         its intensity, and it is masked out of the lower frame so it reads as
+         a ring behind the crown rather than a hoop around the gown. */
+      '  vec2 mdv = vec2((v_uv.x - u_hero.x) * u_aspect, (v_uv.y - u_hero.y) * 1.05);',
+      '  float mdr = length(mdv);',
+      '  float mR = max(u_hero.z, 0.02) * 0.98;',
+      /* the ratio is clamped to 8 before it is squared: with a degenerate
+         (tiny) u_hero.z the raw quotient can pass 250, and 250^2 overflows
+         mediump fp16 (65504) to inf on real mobile parts. 8^2 = 64 is the
+         same answer (exp(-64) is already 0) without ever touching the ceiling. */
+      '  float mq = min(abs(mdr - mR) / (mR * 0.055), 8.0);',
+      '  float mh = min(abs(mdr - mR) / (mR * 0.30), 8.0);',
+      '  float mrim = exp(-mq * mq);',
+      '  float mhaz = exp(-mh * mh) * 0.16;',
+      '  float mmask = smoothstep(-0.10, 0.32, v_uv.y - u_hero.y + 0.30);',
+      '  col += vec3(1.00, 0.83, 0.48) * (mrim + mhaz) * mmask',
+      '       * (0.185 + 0.135 * u_activity) * (0.74 + 0.26 * u_shaft.x);',
       /* fine photographic grain: kills the flat-gradient CG look of the water */
       '  float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);',
       '  col += (grain - 0.5) * 0.010;',
@@ -1095,7 +1168,13 @@
       '}',
       /* soft-knee tonemap (Reinhard, white point 2.4): bright cores stay
          luminous and colored instead of clipping to white soup */
-      'vec3 tonemap(vec3 c) { return c * (vec3(1.0) + c * 0.1736) / (vec3(1.0) + c); }',
+      /* CLIPPING (mandatory fix 2, real-app pass): the bell used a PER-CHANNEL
+         knee, which desaturates toward white exactly where it is driven hardest
+         — the apex, under the crown and the gold star. This is the same
+         bounded luminance-ratio curve the star and wings use: one scalar for
+         all three channels, so the hue is preserved exactly, and 1-exp(-L) is
+         strictly below 1, so this layer cannot reach white on any GPU. */
+      'vec3 tonemap(vec3 c) { float L = max(c.r, max(c.g, c.b)); return c * ((1.0 - exp(-L)) / max(L, 1e-4)); }',
       'void main() {',
       '  float t = v_tp.x;',
       '  float phi = v_tp.y;',
@@ -1131,7 +1210,9 @@
          diffuses down the jelly — the top of a real bell GLOWS, whatever the
          viewing angle (single-scatter trn is ~0 at 90 degrees to the shafts) */
       '  float litv = clamp(0.5 + 0.83 * v_lp.y, 0.0, 1.0);',
-      '  col += vec3(0.58, 0.55, 0.80) * litv * litv * (0.14 + 0.20 * u_sg) * dens;',
+      /* ANATOMY: the ambient wash pulled back ~15% so the organs read through
+         the divinity instead of drowning in it */
+      '  col += vec3(0.58, 0.55, 0.80) * litv * litv * (0.119 + 0.170 * u_sg) * dens;',
       /* micro-wrinkles also catch the light directly */
       '  col *= 1.0 + 0.055 * wrk * mgz;',
       /* skirt micro-ring striations: a band of fine concentric rings just
@@ -1141,17 +1222,21 @@
       '  col += vec3(0.34, 0.30, 0.52) * srng * 0.10;',
       /* interior volume glow: light scattered inside the jelly, seen on the
          far wall through the front — the bell must not be a dark void */
-      '  col += body * (1.0 - u_pass) * (0.10 + 0.14 * u_sg) * (0.6 + 0.4 * sss) * dens;',
+      '  col += body * (1.0 - u_pass) * (0.085 + 0.119 * u_sg) * (0.6 + 0.4 * sss) * dens;',
       /* ---- Blinn-Phong wet-glass sheen: tight gleam + broad satin lobe */
       '  vec3 hv = normalize(L - v);',
       '  float ndh = max(dot(ns, hv), 0.0);',
-      '  float spec = pow(ndh, 200.0) * 3.2 + pow(ndh, 24.0) * 0.30;',
+      /* the tight gleam sits ON the apex, i.e. exactly where the crown and the
+         gold star are composited over it. At 0.80 it was a near-white pinpoint
+         that guaranteed a white core the moment anything landed on top of it. */
+      '  float spec = pow(ndh, 200.0) * 0.52 * smoothstep(0.04, 0.30, t)',
+      '            + pow(ndh, 24.0) * 0.20;',
       /* faint second catchlight: broken water surface, off-axis */
       '  vec3 h2 = normalize(normalize(vec3(-0.45, 0.75, 0.35)) - v);',
-      '  spec += pow(max(dot(ns, h2), 0.0), 60.0) * 0.35;',
+      '  spec += pow(max(dot(ns, h2), 0.0), 60.0) * 0.24;',
       '  spec *= (0.40 + 0.60 * u_sg) * (0.35 + 0.65 * u_pass);',
       '  spec *= 1.0 - 0.35 * mgz * (0.5 + 0.5 * wrk);',  /* wrinkles break the gleam */
-      '  col += vec3(0.80, 0.90, 1.0) * spec;',
+      '  col += vec3(0.86, 0.88, 0.94) * spec;',
       /* ---- 3-sample spectral rim: blue refracts widest, red hugs the edge */
       '  float g1 = 1.0 - ndw;',
       '  float rimR = pow(g1, 3.6);',
@@ -1185,16 +1270,18 @@
       '  }',
       '  gon *= 0.9 + 0.35 * vnoise(q * 14.0);', /* granular gonad tissue */
       '  float organW = mix(0.30, 1.0, u_pass);',/* faint via the far wall */
-      '  col += vec3(0.92, 0.58, 0.66) * gon * face * organW * (0.85 + 0.60 * u_gp);',
+      '  col += vec3(0.95, 0.55, 0.63) * gon * face * organW * (1.34 + 0.78 * u_gp);',
+      /* the clover also OCCLUDES: dark tissue outline lifts its contrast */
+      '  col *= 1.0 - 0.16 * clamp(gon, 0.0, 1.0) * face * u_pass;',
       /* 16 fine radial canals, fading toward the margin (on the shell wall) */
       '  float can = pow(abs(cos(phi * 8.0)), 48.0);',
       '  can *= smoothstep(0.10, 0.24, t) * (1.0 - 0.55 * t);',
-      '  col += vec3(0.62, 0.72, 0.92) * can * face * 0.28;',
+      '  col += vec3(0.66, 0.76, 0.96) * can * face * 0.34;',
       /* gastric nucleus + four-pouch cross, floating on the organ plane */
       '  float nuc = exp(-rr * rr / 0.010);',
       '  float phc = atan(q.y, q.x);',
       '  float cr4 = pow(abs(cos(phc * 2.0 + 0.7854)), 6.0) * exp(-pow((rr - 0.10) / 0.07, 2.0));',
-      '  col += vec3(0.90, 0.82, 0.95) * (nuc * 0.40 + cr4 * 0.28) * face * organW;',
+      '  col += vec3(0.92, 0.84, 0.98) * (nuc * 0.56 + cr4 * 0.40) * face * organW;',
       /* coronal muscle rings near the margin */
       '  float mus = pow(abs(sin(t * 44.0)), 6.0) * smoothstep(0.55, 0.9, t);',
       '  col += vec3(0.45, 0.40, 0.70) * mus * 0.06;',
@@ -1203,8 +1290,39 @@
       '  col += vec3(0.40, 0.62, 0.82) * mring * 0.14;',
       '  float rho = pow(0.5 - 0.5 * cos(8.0 * phi), 24.0) * mring;',
       '  col += vec3(0.80, 0.90, 1.0) * rho * 0.25;',
+      /* ---- ATTACHMENT: marginal collar / mantle. A band of denser, brighter
+         tissue where the 32 tentacles emerge, ridged once per tentacle so the
+         eye reads discrete attachment points rather than a smooth hem. It is
+         opaque enough to VEIL the roots tucked beneath it. */
+      '  float ridge = pow(abs(cos(phi * 16.0)), 2.4);',
+      '  float collar = smoothstep(0.885, 0.935, t) * (1.0 - smoothstep(0.982, 1.0, t));',
+      '  col += vec3(0.48, 0.52, 0.82) * collar * (0.13 + 0.30 * ridge) * (0.7 + 0.5 * u_sg);',
+      /* ---- GOLD REGALIA (Tyrael: filigree plating, not a gold body). Three
+         restrained elements, front wall only, so the flesh stays violet: a
+         filigree band at the margin, eight hard-edged shoulder plates, and
+         eight gothic ribs vaulting the dome between them. */
+      '  float lo8 = cos(8.0 * phi);',
+      '  float fil = exp(-pow((t - 0.938) / 0.020, 2.0));',
+      '  float scroll = 0.5 + 0.5 * sin(phi * 32.0 + 1.7 * lo8);',
+      '  float fine = pow(abs(sin(phi * 16.0)), 10.0);',
+      '  vec3 gold = vec3(1.00, 0.74, 0.26);',
+      '  col += gold * fil * u_pass * (0.17 + 0.24 * scroll + 0.36 * fine) * (0.55 + 0.55 * u_sg);',
+      '  float plate = smoothstep(0.500, 0.530, t) * (1.0 - smoothstep(0.650, 0.680, t));',
+      '  float pm = smoothstep(0.42, 0.88, lo8);',
+      '  float pedge = exp(-pow((t - 0.515) / 0.009, 2.0)) + exp(-pow((t - 0.665) / 0.009, 2.0));',
+      '  col += gold * u_pass * pm * (plate * 0.13 + pedge * 0.36) * (0.5 + 0.6 * u_sg);',
+      /* eight gothic ribs vaulting the dome — VERTICAL structure, the spine of
+         the Tyrael read: the eye is dragged up the body to the crown */
+      '  float rib = pow(abs(cos(phi * 4.0)), 52.0);',
+      '  rib *= smoothstep(0.10, 0.22, t) * (1.0 - smoothstep(0.90, 0.99, t));',
+      /* the regalia YIELDS to the anatomy: where a vault rib crosses the gonad
+         clover it is pulled back hard, so the divinity never washes the organ
+         that proves she is still a creature (mandatory fix 3) */
+      '  rib *= 1.0 - 0.55 * clamp(gon, 0.0, 1.0) * face;',
+      '  col += gold * rib * u_pass * 0.36 * (0.45 + 0.55 * u_sg);',
       /* translucent body: alpha dims what is behind (premultiplied over) */
-      '  float al = (0.12 + 0.18 * ndw + 0.15 * gon * face * u_pass) * dens;',
+      '  float al = (0.12 + 0.18 * ndw + 0.15 * gon * face * u_pass',
+      '    + 0.20 * collar * u_pass) * dens;',
       '  al *= mix(0.38, 1.0, u_pass);',        /* the far wall barely occludes */
       '  col *= mix(0.72, 1.0, u_pass);',
       /* far-wall margin dissolve: the back wall melts to nothing toward its
@@ -1212,6 +1330,12 @@
       '  float bkFade = 1.0 - (1.0 - u_pass) * smoothstep(0.68, 0.96, t);',
       '  col *= bkFade;',
       '  al *= bkFade;',
+      /* APEX CRATER (mandatory fix 2, real-app pass). The star IS the light at
+         the crown; the glass directly under it is pulled down so the composite
+         carries the star's GOLD, not the sum of gold + cool glass, which is
+         what actually clipped to white on the real page. Narrow (t < ~0.2) and
+         front-wall only, so the dome keeps its volume everywhere else. */
+      '  col *= 1.0 - 0.70 * u_pass * exp(-pow(t / 0.24, 2.0));',
       '  col *= u_glow * v_dim;',
       '  col = tonemap(col);',
       '  al = clamp(al, 0.0, 0.62) * v_dim;',
@@ -1256,14 +1380,19 @@
       '    float prof = 1.0 - vv * vv;',
       '    float bead = 0.82 + 0.30 * sin(u * 46.0 - u_wob * 2.0 + v_aux.w * 500.0);',
       '    a = prof * prof * (1.0 - 0.78 * u) * br * 0.42 * bead;',
-      '    a += pow(prof, 8.0) * (1.0 - 0.6 * u) * br * 0.30;',
-      '    a *= 0.45 + 0.55 * smoothstep(0.0, 0.18, u);',  /* roots melt into the rim */
+      '    a += pow(prof, 8.0) * (1.0 - 0.6 * u) * br * 0.22;',
+      /* ATTACHMENT: the root does NOT fade out. It is the brightest, densest
+         part of the strand — luminance matched to the bell rim it grows from,
+         so the tissue reads continuous across the margin. */
+      '    a *= (0.74 + 0.30 * smoothstep(0.0, 0.13, u)) * smoothstep(0.0, 0.055, u);',
       /* violet root -> faint cyan tip: depth cue without breaking rim discipline */
       '    col = mix(vec3(0.60, 0.48, 0.84), vec3(0.22, 0.56, 0.80), smoothstep(0.35, 1.0, u) * 0.65);',
-      '    col = mix(col, vec3(0.82, 0.88, 1.0), pow(prof, 8.0) * 0.5);',
+      '    col = mix(col, vec3(0.82, 0.88, 1.0), pow(prof, 8.0) * 0.36);',
+      /* root tint matched to the marginal nerve ring / rim glow of the bell */
+      '    col = mix(col, vec3(0.52, 0.57, 0.88), (1.0 - smoothstep(0.0, 0.22, u)) * 0.40);',
       /* brighter wet core line: the strand's inner thread stays waterlit */
       '    col += vec3(0.26, 0.30, 0.42) * pow(prof, 6.0) * (1.0 - 0.55 * u) * 0.7;',
-      '  } else {',
+      '  } else if (v_aux.w < 1.5) {',
       /* frilled oral arm: soft curtain, ruffle brightens in traveling folds;
          third lace octave + lit hem line give the frill legible structure */
       '    float armPh = (v_aux.w - 1.0) * 300.0;',
@@ -1289,8 +1418,52 @@
       '    col = mix(vec3(0.62, 0.50, 0.82), vec3(0.78, 0.64, 0.88), fold);',
       /* the ruffled hem catches the key light */
       '    col += vec3(0.52, 0.44, 0.68) * hemGlow * lace * 0.55;',
+      '  } else {',
+      /* SERAPH RIBBON-WING (kind 2): not a feather — a streamer of pure light.
+         Translucent silk body, burning edges, energy flowing root -> tip, and
+         a tip that breaks into ascending wisps instead of ending on a quad. */
+      '    float wph = (v_aux.w - 2.0) * 120.0;',
+      '    float edge = abs(vv);',
+      '    float core = 1.0 - edge * edge;',
+      '    float rim = smoothstep(0.42, 0.94, edge) * (1.0 - smoothstep(0.94, 1.0, edge));',
+      /* integer u_wob multipliers: wobPh wraps at 2pi, so the flow never pops */
+      '    float flow = 0.5 + 0.5 * sin(u * 17.0 - u_wob * 3.0 + wph);',
+      '    float flow2 = 0.5 + 0.5 * sin(u * 6.0 - u_wob * 2.0 + wph * 1.7 + 1.1);',
+      /* a hard leading filament: the wing keeps a defined edge = structure */
+      '    float lead = smoothstep(0.80, 0.99, vv) * (1.0 - smoothstep(0.99, 1.0, vv));',
+      '    float taper = smoothstep(0.02, 0.22, u) * (1.0 - smoothstep(0.58, 1.0, u));',
+      '    float wisp = mix(1.0, 0.22 + 0.78 * flow, smoothstep(0.34, 0.95, u));',
+      /* SILK STRIATION: 5-6 finer filaments running the length of the ribbon.
+         Without this the membrane reads as one flat blade; with it the wing
+         reads as WOVEN light — silk made of radiance, not a gold plank. */
+      '    float silk = 0.74 + 0.26 * cos(vv * 9.4248 + wph * 0.61 + u * 2.4);',
+      '    silk *= 0.88 + 0.12 * cos(vv * 18.8496 - wph * 0.37);',
+      '    a = (core * (0.26 + 0.30 * flow2) + rim * 0.52 + lead * 0.70)',
+      '      * taper * wisp * silk * br * 0.42;',
+      /* TIP FRAY: past 55% of the ribbon the flow wave GATES the alpha, so the
+         blade stops terminating on a clean edge and instead sheds a train of
+         discrete ascending spirit-wisps (the geometry drifts up to match). */
+      '    a *= mix(1.0, smoothstep(0.02, 0.62, flow), smoothstep(0.55, 1.0, u));',
+      '    a *= smoothstep(1.0, 0.86, edge);',
+      '    a = max(a, 0.0);',
+      /* gold: amber silk through the body, white-gold along the burning edge */
+      '    col = mix(vec3(1.00, 0.58, 0.14), vec3(1.00, 0.80, 0.36), flow2);',
+      '    col = mix(col, vec3(1.00, 0.92, 0.70), min(rim + lead, 1.0) * 0.55);',
+      '    col += vec3(0.30, 0.15, 0.02) * flow;',
       '  }',
-      '  gl_FragColor = vec4(col * a, 1.0);',
+      /* LUMINANCE-RATIO TONEMAP on the wings only, applied to THIS layer
+         before it is composited (never after the additive stack — that is
+         what lets a ribbon reach white before the curve ever sees it).
+         Scaling every channel by one scalar preserves the gold hue EXACTLY,
+         and the 1-exp form is strictly bounded below 1, so the brightest
+         possible wing fragment is (1.00, 0.92, 0.70) — luminous gold, never
+         a white sheet, on any GPU regardless of drive level. */
+      '  vec3 rad = col * a;',
+      '  if (v_aux.w > 1.5) {',
+      '    float L = max(rad.r, max(rad.g, rad.b));',
+      '    rad *= (1.0 - exp(-L * 1.30)) / max(L, 1e-4);',
+      '  }',
+      '  gl_FragColor = vec4(rad, 1.0);',
       '}'
     ].join('\n');
 
@@ -1379,8 +1552,17 @@
       '  float dim = dimBand(gl_FragCoord.x);',
       /* under the dim band, also pull the near-white core back toward the
          base cyan so the ring never approaches label-swallowing white */
-      '  vec3 col = mix(vec3(0.0, 0.643, 0.863), vec3(0.918, 0.957, 1.0), band * 0.6 * dim);',
-      '  gl_FragColor = vec4(col * band * v_a * dim, 1.0);',
+      /* the ring core stays CYAN, not near-white: with the old (0.918,0.957,1.0)
+         core a single shell already peaked at (234,244,255), so two overlapping
+         shells clipped the frame to white. Held at (95,203,238) it takes three
+         to clip, and the sweep reads as sonar rather than as a flashbulb. */
+      '  vec3 col = mix(vec3(0.0, 0.643, 0.863), vec3(0.72, 0.94, 1.0), band * 0.52 * dim);',
+      '  vec3 rad = col * band * v_a * dim;',
+      /* per-layer luminance-ratio knee: identity below 0.72, asymptotic to 1
+         above it. One scalar for all three channels, so the hue is untouched. */
+      '  float L = max(rad.r, max(rad.g, rad.b));',
+      '  float Lt = L < 0.72 ? L : 0.72 + 0.28 * (1.0 - exp(-(L - 0.72) / 0.28));',
+      '  gl_FragColor = vec4(rad * (Lt / max(L, 1e-4)), 1.0);',
       '}'
     ].join('\n');
 
@@ -1441,7 +1623,9 @@
          paints a vertical seam in the water beside her */
       '  float dk = exp(-r * r * 1.2) * 0.42'
         + ' * (1.0 - smoothstep(0.70, 0.98, max(abs(v_q.x), abs(v_q.y))));',
-      '  float br = u_int * (0.85 + 0.35 * u_pulse);',
+      /* ANATOMY: the aureole pulled back ~15% so it stops washing out the
+         gonad clover and radial canals won in the photoreal pass */
+      '  float br = u_int * (0.85 + 0.35 * u_pulse) * 0.85;',
       '  vec3 col = vec3(0.42, 0.30, 0.62) * exp(-r * r * 22.0) * 0.26',
       '           + vec3(0.24, 0.40, 0.62) * exp(-r * r * 7.0) * 0.11',
       '           + vec3(0.10, 0.28, 0.33) * exp(-r * r * 2.6) * 0.05;',
@@ -1451,9 +1635,20 @@
       '  float ring = exp(-pow((r - 0.42) / 0.21, 2.0));',
       '  float rays = 0.42 + 0.34 * sin(ang * 10.0 + u_ray * 2.0)',
       '             + 0.24 * sin(ang * 5.0 - u_ray * 3.0 + 1.7);',
-      '  float glory = ring * rays + exp(-pow((r - 0.26) / 0.20, 2.0)) * 0.40;',
-      '  col += vec3(0.97, 0.88, 0.68) * glory * 0.32;',
-      '  gl_FragColor = vec4(col * br * dim, dk);',
+      '  float glory = ring * rays + exp(-pow((r - 0.26) / 0.20, 2.0)) * 0.30;',
+      /* ANATOMY (fix 3) + CLIPPING (fix 2): the glory is the single largest
+         term in this layer, and at full flare it alone drove the aura to
+         (209,191,211) — a near-white sheet that both washed the clover and
+         guaranteed a white apex the moment the gold star was added on top.
+         Held at 0.205 the aureole still reads as a glory but stops competing
+         with the organs, and it leaves headroom for the star above it. */
+      '  col += vec3(0.97, 0.88, 0.68) * glory * 0.185;',
+      /* per-layer bounded knee: one scalar across rgb, so the aureole keeps
+         its warm white-gold hue and can never reach 1.0 on its own */
+      '  vec3 arad = col * br * dim;',
+      '  float aL = max(arad.r, max(arad.g, arad.b));',
+      '  arad *= (1.0 - exp(-aL * 1.18)) / max(aL, 1e-4);',
+      '  gl_FragColor = vec4(arad, dk);',
       '}'
     ].join('\n');
 
@@ -1529,6 +1724,7 @@
       'varying vec2 v_q;',
       'uniform float u_int;',
       'uniform float u_tw;',    /* bounded twinkle phase */
+      'uniform float u_cr;',    /* bounded crown-shimmer phase */
       'uniform float u_floor;',
       'uniform vec3 u_dimD;',   /* dim band in DEVICE px (left, right, feather) */
       'float dimBand(float px) {',
@@ -1542,16 +1738,51 @@
       '}',
       'void main() {',
       '  float r = length(v_q);',
-      '  float core = exp(-r * r * 42.0) * 1.5;',
+      '  float ang = atan(v_q.y, v_q.x + 1e-5);',   /* atan(0,0) is undefined */
       '  float w1 = 0.85 + 0.15 * sin(u_tw);',
+      '  float core = exp(-r * r * 90.0) * 1.15;',
       '  float rays = exp(-abs(v_q.x) * 30.0) * exp(-abs(v_q.y) * 4.5)',
       '             + exp(-abs(v_q.y) * 30.0) * exp(-abs(v_q.x) * 4.5);',
-      '  rays *= w1 * smoothstep(1.0, 0.2, r) * 0.55;',
-      '  float halo = exp(-r * r * 6.0) * 0.22;',
+      '  rays *= w1 * smoothstep(1.0, 0.2, r) * 0.32;',
+      /* THE CROWN (Tyrael: hard-edged, architectural — authority, not a soft
+         halo): a circlet seen in perspective (squashed in y) carrying seven
+         blades, with light running around the band. */
+      '  vec2 e = vec2(v_q.x, (v_q.y - 0.02) * 2.05);',
+      '  float er = length(e);',
+      '  float band = exp(-pow((er - 0.62) / 0.038, 2.0));',
+      '  band *= 0.72 + 0.28 * sin(ang * 7.0 - u_cr);',
+      '  vec2 d = vec2(v_q.x, v_q.y + 0.30);',
+      '  float da = atan(d.y, d.x + 1e-5);',
+      '  float dr = length(d);',
+      '  float bm = pow(abs(cos(da * 4.5)), 30.0);',
+      '  float up = smoothstep(-0.06, 0.26, v_q.y);',
+      '  float blades = bm * up * exp(-pow((dr - 0.82) / 0.22, 2.0))',
+      '               * (1.0 - smoothstep(0.98, 1.12, dr));',
+      '  float crown = band * 1.00 + blades * 2.10;',
+      '  float halo = exp(-r * r * 6.0) * 0.07;',
       '  float dim = max(dimBand(gl_FragCoord.x), u_floor);',
-      '  float a = (core + rays + halo) * u_int * dim;',
-      '  vec3 gold = vec3(0.95, 0.89, 0.75);',
-      '  gl_FragColor = vec4(mix(gold, vec3(1.0, 0.98, 0.92), core) * a, 1.0);',
+      '  float a = (core + rays + crown + halo) * u_int * dim;',
+      /* TONEMAP (mandatory fix 2): a LUMINANCE-RATIO curve, not a per-channel
+         knee. Every channel is scaled by one scalar, so the gold hue survives
+         the curve exactly instead of drifting neutral in the very core; and
+         1-exp(-L) is bounded strictly below 1, so the crown apex can never
+         reach pure white on a real GPU no matter how hard the flare drives
+         it. The hardest possible apex fragment is (1.00, 0.77, 0.31) — that
+         is a saturated gold star, and it is a hard ceiling, not a hope. */
+      '  vec3 gold = vec3(1.00, 0.74, 0.26);',
+      '  vec3 hot = vec3(1.00, 0.88, 0.56);',
+      '  vec3 rad = mix(gold, hot, clamp(core, 0.0, 1.0) * 0.12) * a;',
+      '  float L = max(rad.r, max(rad.g, rad.b));',
+      /* CEILING (mandatory fix 2, real-app pass): the curve alone bounds this
+         layer below 1, but the layer is composited ADDITIVELY over the aureole
+         and the sonar shells, and layer-max + bright background was still
+         clipping the crown to white on the real page. Attribution says the
+         star is responsible for essentially all of that (killing this one
+         layer takes the crown from ~1800 white px to ~30), so its own ceiling
+         is held at 0.84: the core stays the brightest thing in the frame and
+         stays GOLD, and the composite has headroom left above it. */
+      '  rad *= 0.84 * (1.0 - exp(-L * 1.24)) / max(L, 1e-4);',
+      '  gl_FragColor = vec4(rad, 1.0);',
       '}'
     ].join('\n');
 
@@ -1638,7 +1869,8 @@
     }
 
     function buildRibIndex() {
-      var idx = new Uint16Array((CH_TENT * (TENT_NODES - 1) + CH_ARM * (ARM_NODES - 1)) * 6);
+      var idx = new Uint16Array((CH_TENT * (TENT_NODES - 1) + CH_ARM * (ARM_NODES - 1)
+        + CH_WING * (WING_NODES - 1)) * 6);
       var o = 0, c, k;
       for (c = 0; c < CHAINS; c++) {
         var base = chOff[c] * 2, len = chLen[c];
@@ -1679,7 +1911,7 @@
         ['u_vp', 'u_right', 'u_up', 'u_hpos', 'u_time', 'u_hs', 'u_act',
          'u_rip', 'u_ripA', 'u_dim', 'u_vpw', 'u_floor']);
       progStar = makeProg(GLOW_VS, STAR_FS, { a_q: 0 },
-        ['u_vp', 'u_pos', 'u_right', 'u_up', 'u_size', 'u_int', 'u_tw', 'u_floor', 'u_dimD']);
+        ['u_vp', 'u_pos', 'u_right', 'u_up', 'u_size', 'u_int', 'u_tw', 'u_cr', 'u_floor', 'u_dimD']);
       if (!progBack || !progBell || !progRib || !progSil || !progShell || !progGlow || !progAura ||
           !progMote || !progStar) { return false; }
 
@@ -1777,7 +2009,91 @@
       r += 0.006 * Math.sin(24 * phi - flutPh + 1.1);
       r *= 1 - 0.22 * ctr;
       y -= 0.13 * ctr;
+      /* ATTACHMENT: the roots are tucked slightly UNDER the margin (inside the
+         rim radius, below the lappet line) so the bell's own skirt — drawn
+         after the ribbons — veils them. The tissue then reads as emerging
+         from beneath the mantle instead of butting against a hard edge. */
+      r *= 0.936;
+      y -= 0.052;
       mgX = r * Math.cos(phi); mgY = y; mgZ = r * Math.sin(phi);
+    }
+
+    /* Seraph ribbon-wing (chain kind 2): an analytic sweep in bell-local space
+       walked node by node, then lagged into the shared node arrays so the
+       ribbon STREAMS (tips trail the shoulder, never hang limp). No verlet
+       constraints, no allocation — the same preallocated arrays, the same
+       ribbon draw call. Bilaterally mirrored across x: it reads as WINGS. */
+    function wingUpdate(c, dt, snap) {
+      var w = c - CH_TENT - CH_ARM;
+      var off = chOff[c], len = chLen[c];
+      var side = wgSide[w];
+      /* root: on the shoulder of the bell, just inside the shell */
+      var rth = wgRootT[w] * 2.05;
+      var rr = Math.sin(rth) * 0.80;
+      var dp = wgDphi[w];
+      var px = side * rr * Math.cos(dp);
+      var py = Math.cos(rth) * 0.60 + 0.03;
+      var pz = rr * Math.sin(dp);
+      /* the wing answers the breath, the scan, and the sonar */
+      var breath = Math.sin(pulsePhase - 1.1);
+      var fl = wingFlare < 1.5 ? wingFlare : 1.5;
+      var open = 0.11 + 0.085 * breath + 0.40 * fl + 0.10 * activity;
+      var t0 = wgTh0[w] + open * 0.5;
+      var t1 = wgTh1[w] + open;
+      /* WING FOLD: each ribbon's angle is lerped toward the vertical by a
+         common fraction, so the FAN ORDER (and therefore the wing silhouette)
+         survives while the horizontal span contracts ~26%. This is what the
+         layout spends before it spends her size. */
+      if (wingFold > 0) {
+        var fk = 1 - 0.62 * wingFold;
+        t0 = 1.5707963 - (1.5707963 - t0) * fk;
+        t1 = 1.5707963 - (1.5707963 - t1) * fk;
+      }
+      var segL = wgLen[w] * (1 + 0.15 * fl + 0.04 * activity) / (len - 1);
+      var ph = wgPh[w];
+      var k, i3, u, ang, zd, dx, dy, dz, dl, a, uu, fr;
+      for (k = 0; k < len; k++) {
+        i3 = (off + k) * 3;
+        var tx = heroPX + m9[0] * px + m9[3] * py + m9[6] * pz;
+        var ty = heroPY + m9[1] * px + m9[4] * py + m9[7] * pz;
+        var tz = HERO_Z + m9[2] * px + m9[5] * py + m9[8] * pz;
+        /* SPIRIT WISPS: over the last ~4 nodes the ribbon stops being a blade.
+           Its target lifts (the tip ascends instead of ending flat) and it is
+           given a per-wing lateral splay, so the ends fray apart and dissolve
+           upward — the fragment side gates them into discrete trails. */
+        uu = k / (len - 1);
+        if (uu > 0.82) {
+          fr = (uu - 0.82) / 0.18;
+          fr *= fr;
+          ty += fr * 0.30 * heroScale;
+          tx += fr * 0.10 * heroScale * side * Math.sin(ph * 1.9 + timeS * 0.8);
+          tz += fr * 0.09 * heroScale * Math.sin(ph * 2.7 - timeS * 0.6);
+        }
+        if (snap || k === 0) {
+          ndPos[i3] = tx; ndPos[i3 + 1] = ty; ndPos[i3 + 2] = tz;
+        } else {
+          u = k / (len - 1);
+          /* the frayed tail lags harder than the shaft: it streams, it does
+             not follow — this is what keeps the wisps trailing behind */
+          a = (30 - 17 * u) * dt * (u > 0.82 ? 1 - 0.55 * (u - 0.82) / 0.18 : 1);
+          if (a > 1) { a = 1; } else if (a < 0) { a = 0; }
+          ndPos[i3] += (tx - ndPos[i3]) * a;
+          ndPos[i3 + 1] += (ty - ndPos[i3 + 1]) * a;
+          ndPos[i3 + 2] += (tz - ndPos[i3 + 2]) * a;
+        }
+        ndPrev[i3] = ndPos[i3];
+        ndPrev[i3 + 1] = ndPos[i3 + 1];
+        ndPrev[i3 + 2] = ndPos[i3 + 2];
+        if (k === len - 1) { break; }
+        u = (k + 0.5) / (len - 1);
+        ang = t0 + (t1 - t0) * Math.pow(u, 0.62);
+        /* the ribbon of light ripples root -> tip: silk made of radiance */
+        ang += (0.05 + 0.20 * u) * Math.sin(u * 4.6 - timeS * 1.7 + ph);
+        zd = (0.10 + 0.40 * u) * Math.sin(u * 3.4 - timeS * 1.25 + ph * 1.7);
+        dx = side * Math.cos(ang); dy = Math.sin(ang); dz = zd;
+        dl = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+        px += dx / dl * segL; py += dy / dl * segL; pz += dz / dl * segL;
+      }
     }
 
     /* bell model matrix: Rz(leanZ) * Rx(leanX) * scale, column-major */
@@ -1797,7 +2113,63 @@
     function setupHero() {
       var mobile = W <= 720;
       var pxPerWorld = H / (2 * tanY * (-HERO_Z));
+      /* WING ENVELOPE (local bell units, measured at full flare):
+         WING_REACH — how far the outermost ribbon tip sits from the spine
+         WING_RISE  — how far the top ribbon tip rises above the anchor
+         Both are what the layout has to respect: the bell fitting the frame
+         means nothing now that she has a 4.6-radius span. */
+      var WING_REACH = 2.30, WING_RISE = 2.05;
+      /* ------------------------------------------------ desktop wing solve
+         Two bounds have to hold AT THE SAME TIME beside the console column:
+           anchorPxX + reach <= W - 8                  (right wingtip on frame)
+           anchorPxX - reach >= right - 0.22 * reach   (<=22% of the inboard
+                                                       wing behind the glass)
+         i.e. anchorPxX ∈ [right + 0.78·reach, W − 8 − reach], which is a
+         non-empty interval only while 1.78·reach <= W − 8 − right. The old
+         guard applied the two as sequential clamps with the LOW one last, so
+         whenever the interval was empty the low clamp silently won and shoved
+         her wingtip off the right edge; and its own low bound (right −
+         0.22·reach) was the bell centre, not the wingtip, so it never bought
+         the occlusion budget the comment promised. Solve it instead, spending
+         the cheapest currency first: FOLD the fan toward the vertical (she
+         keeps her size and both wings read), then presence — and if nothing
+         satisfies both, the FRAME EDGE always wins. */
+      var right = 0, avail = 0, reachPU = WING_REACH * pxPerWorld, reach = 0;
+      if (!mobile) {
+        var col = document.querySelector('.column');
+        right = col ? col.getBoundingClientRect().right : W * 0.3;
+        avail = Math.max(240, W - right);
+        /* PRESENCE: a modest nudge up from the 1.72 cap so she commands more
+           of the open water. Deliberately NOT pushed to half the frame — the
+           wings open ~1.5 bell radii out and up, and a wingtip running off
+           the frame edge at full flare is the exact failure this cap exists
+           to prevent, so the headroom stays. */
+        heroScale = Math.max(1.15, Math.min(1.82, (avail * 0.615) / (2 * pxPerWorld)));
+        var lim = (W - 8 - right) / 1.78;
+        /* 1. give back the presence bonus, down to the 1.15 presence floor */
+        if (reachPU * heroScale > lim) {
+          heroScale = Math.max(1.15, lim / reachPU);
+        }
+        /* 2. FOLD: rotating the fan upright costs no size and no wing — it
+              buys back span, and High Heavens is vertical anyway. Capped at
+              0.72: past that the two fans stand up as parallel plumes and
+              stop reading as WINGS at a glance, which is the whole point. */
+        wingFold = 0;
+        if (reachPU * heroScale > lim) {
+          wingFold = Math.min(0.72, (1 - lim / (reachPU * heroScale)) / 0.26);
+        }
+        var reachU = reachPU * (1 - 0.26 * wingFold);
+        /* 3. only now spend size, down to a hard legibility floor */
+        if (reachU * heroScale > lim) {
+          heroScale = Math.max(0.80, lim / reachU);
+        }
+        reach = reachU * heroScale;
+      }
       if (mobile) {
+        /* the fan keeps its full spread here: the scarce axis is the VERTICAL
+           band above the card, and folding upright would drive the wingtips
+           off the top of the frame instead of buying anything */
+        wingFold = 0;
         /* The console card spans the full width here and is opaque — anchor
            the bell in the measured open-water band ABOVE it (same idea as the
            desktop .column probe) so the hero is never buried behind the card. */
@@ -1805,29 +2177,48 @@
         var pTop = panel ? panel.getBoundingClientRect().top : H * 0.34;
         var band = Math.max(H * 0.14, Math.min(H * 0.55, pTop));
         /* fit: bell is ~0.94·s half-wide and ~1.10·s tall (apex +0.60, scalloped
-           margin ≈ −0.50) in world units at HERO_Z */
-        heroScale = Math.max(0.55, Math.min(1.5, Math.min(
-          (W * 0.62) / (2 * pxPerWorld * 0.94),
-          (band * 0.80) / (pxPerWorld * 1.10))));
-        anchorPxX = W * 0.68;   /* right of the brand block in the header band */
+           margin ≈ −0.50) in world units at HERO_Z — but the WINGSPAN, not the
+           bell, is what a 390px viewport actually has to hold. Fitting the bell
+           alone put both wings off the left and right edges at once, which read
+           as gold streaks entering from the corners rather than as wings. */
+        heroScale = Math.max(0.5, Math.min(1.5, Math.min(
+          (W * 1.04) / (2 * pxPerWorld * WING_REACH),
+          /* vertical: the whole being — wingtips at the top, scalloped margin
+             at the bottom — has to sit inside the band, or the card eats her
+             body and only a crown is left above it */
+          (band - 12) / (pxPerWorld * (WING_RISE + 0.48)))));
+        anchorPxX = W * 0.5;    /* centred: the span is symmetric, so she is too */
         /* margin scallops (~0.48·s below the anchor) rest just above the card;
-           the 0.72·s floor keeps the leaning, bobbing apex off the viewport top */
-        anchorPxY = Math.max(pxPerWorld * heroScale * 0.72,
+           the floor is the WING rise now, not the apex — the crown and the
+           full ribbon fan have to clear the viewport top, not just the bell */
+        anchorPxY = Math.max(pxPerWorld * heroScale * WING_RISE + 6,
                              band - pxPerWorld * heroScale * 0.48 - 6);
         heroFloor = 0.55;
       } else {
-        var col = document.querySelector('.column');
-        var right = col ? col.getBoundingClientRect().right : W * 0.3;
-        anchorPxX = (right + W) * 0.5; anchorPxY = H * 0.40;
-        var avail = Math.max(240, W - right);
-        heroScale = Math.max(1.3, Math.min(2.15, (avail * 0.72) / (2 * pxPerWorld)));
-        heroFloor = 0;
+        /* Seraph: the wings need sky. She sits a little lower and a little
+           smaller than the bare Medusa did so the ribbon-wings and the crown
+           have headroom to open above her instead of clipping the frame. */
+        anchorPxY = H * 0.52;
+        anchorPxX = right + avail * 0.42;
+        var loX = right + 0.78 * reach;   /* the inboard wing still reads */
+        var hiX = W - 8 - reach;          /* the outboard wingtip stays on frame */
+        if (anchorPxX < loX) { anchorPxX = loX; }
+        if (anchorPxX > hiX) { anchorPxX = hiX; }   /* the frame edge wins, always */
+        /* On a ~800px frame the 600px column leaves no water at all: keeping
+           her whole means sitting behind the glass. Lift the dim floor the way
+           the phone layout does when that happens, or she fades to a stain. */
+        heroFloor = anchorPxX < right ? 0.5 : 0;
       }
       moteCount = mobile ? 40 : N_MOTE;   /* fewer star-motes on small screens */
       var c;
       for (c = 0; c < CHAINS; c++) {
-        var vary = chKind[c] === 0 ? 0.84 + 0.32 * (0.5 + 0.5 * Math.sin(c * 12.9898)) : 1;
-        chSeg[c] = (chKind[c] === 0 ? TENT_LEN : ARM_LEN) * vary * heroScale / (chLen[c] - 1);
+        var kd = chKind[c];
+        if (kd === 2) {
+          chSeg[c] = wgLen[c - CH_TENT - CH_ARM] * heroScale / (chLen[c] - 1);
+          continue;
+        }
+        var vary = kd === 0 ? 0.84 + 0.32 * (0.5 + 0.5 * Math.sin(c * 12.9898)) : 1;
+        chSeg[c] = (kd === 0 ? TENT_LEN : ARM_LEN) * vary * heroScale / (chLen[c] - 1);
       }
     }
 
@@ -1843,6 +2234,7 @@
       var c, k;
       for (c = 0; c < CHAINS; c++) {
         var off = chOff[c], len = chLen[c];
+        if (chKind[c] === 2) { wingUpdate(c, 0, true); continue; }
         if (chKind[c] === 0) { bellMarginLocal(chPhi[c]); }
         else {
           mgX = Math.cos(chPhi[c]) * 0.26; mgY = -0.04; mgZ = Math.sin(chPhi[c]) * 0.26;
@@ -1867,6 +2259,7 @@
       for (c = 0; c < CHAINS; c++) {
         var off = chOff[c], len = chLen[c];
         var kind = chKind[c];
+        if (kind === 2) { wingUpdate(c, dt, false); continue; }
         if (kind === 0) { bellMarginLocal(chPhi[c]); }
         else {
           mgX = Math.cos(chPhi[c]) * 0.26; mgY = -0.04; mgZ = Math.sin(chPhi[c]) * 0.26;
@@ -1950,11 +2343,30 @@
       }
     }
 
+    function smooth01(x) {
+      if (x <= 0) { return 0; }
+      if (x >= 1) { return 1; }
+      return x * x * (3 - 2 * x);
+    }
+
     /* camera-facing ribbon extrusion into the preallocated stream */
     function buildRibbons() {
       var o = 0, c, k;
       for (c = 0; c < CHAINS; c++) {
         var off = chOff[c], len = chLen[c], kind = chKind[c];
+        /* strands rooted on the FAR side of the margin are seen through the
+           whole thickness of the jelly: dim them so the near fringe reads in
+           front of the body instead of a flat picket across the bell */
+        var farD = kind === 0
+          ? 1 - 0.66 * smooth01((HERO_Z - ndPos[off * 3 + 2]) / (0.85 * heroScale))
+          : 1;
+        /* ROOT JITTER: a flat root width for all 32 strands made the fringe
+           look machined at the rim. Hoisted out of the node loop, so this is
+           one hash per chain per frame: the mean root mass is unchanged, but
+           each strand emerges +/-25% thicker or finer than its neighbour. */
+        var rootJ = kind === 0
+          ? 0.0855 * (0.75 + 0.50 * (0.5 + 0.5 * Math.sin(c * 17.31 + 4.7)))
+          : 0;
         for (k = 0; k < len; k++) {
           var i3 = (off + k) * 3;
           var k0 = k > 0 ? k - 1 : 0, k1 = k < len - 1 ? k + 1 : len - 1;
@@ -1967,23 +2379,47 @@
           if (sl < 1e-5) { sx = 1; sy = 0; sz = 0; sl = 1; }
           sx /= sl; sy /= sl; sz /= sl;
           var u = k / (len - 1);
-          var w, kv;
+          var w, kv, br, vsg = 1;
           if (kind === 0) {
-            /* subtle beaded swell along the strand (thin ribbons stay thin) */
-            w = heroScale * (0.030 - 0.020 * u + 0.0045 * Math.sin(u * 24.0 + chSeed[c]));
+            /* ATTACHMENT: heavy root (3.3x the old width — the 32 roots now
+               abut into a continuous marginal fringe/collar) collapsing fast
+               to a fine filament tip. The strand GROWS out of the mantle. */
+            /* the 0.0075 floor (was 0.0055) is what stops the lower strand
+               reading as a wiry hairline once the root mass tapers away */
+            w = heroScale * (0.0075 + rootJ * Math.pow(1 - u, 7.0))
+              * (1 + 0.09 * Math.sin(u * 24.0 + chSeed[c]));
             kv = c * 0.002;   /* per-chain bead phase, still < 0.5 (tentacle branch) */
-          } else {
+            br = heroBright * farD * (0.80 + 0.36 * (0.5 + 0.5 * Math.sin(c * 5.7 + 1.3)));
+          } else if (kind === 1) {
             w = heroScale * 0.135 * (1 - 0.42 * u) *
               (1 + 0.36 * Math.sin(u * 12.0 + timeS * 1.5 + c * 1.9));
             kv = 1 + (c - CH_TENT) * 0.02;   /* de-syncs each arm's ruffle */
+            br = heroBright * 1.30;
+          } else {
+            /* ribbon-wing: narrow where it leaves the shoulder, broad through
+               the shaft, drawn out to a streaming filament at the tip */
+            var wi = c - CH_TENT - CH_ARM;
+            /* MIRROR THE RIBBON COORDINATE. The side vector is cross(tangent,
+               view), i.e. always 90° CCW of the tangent — so +v is the UPPER
+               (leading) edge on the right wing and the LOWER (trailing) edge
+               on the mirrored left wing. The burning filament in the shader is
+               keyed on signed v, so without this flip it rides the outboard
+               edge of one wing and the inboard edge of the other. Only the
+               emitted coordinate flips; the vertex ORDER is untouched, so the
+               winding and the shared index buffer are unchanged. */
+            vsg = wgSide[wi];
+            var sh = (0.08 + 0.92 * smooth01(u / 0.28))
+              * (1 - 0.66 * smooth01((u - 0.36) / 0.64)) + 0.03;
+            w = heroScale * 0.118 * sh
+              * (1 + 0.15 * Math.sin(u * 7.0 - timeS * 1.6 + wgPh[wi]));
+            kv = 2 + wi * 0.02;
+            br = heroBright * wgBr[wi] * (1.78 + 0.46 * activity
+              + 0.85 * (wingFlare < 1.5 ? wingFlare : 1.5));
           }
-          var br = heroBright * (kind === 0
-            ? 0.80 + 0.36 * (0.5 + 0.5 * Math.sin(c * 5.7 + 1.3))
-            : 1.30);
           ribF[o++] = x - sx * w; ribF[o++] = y - sy * w; ribF[o++] = z - sz * w;
-          ribF[o++] = u; ribF[o++] = -1; ribF[o++] = br; ribF[o++] = kv;
+          ribF[o++] = u; ribF[o++] = -vsg; ribF[o++] = br; ribF[o++] = kv;
           ribF[o++] = x + sx * w; ribF[o++] = y + sy * w; ribF[o++] = z + sz * w;
-          ribF[o++] = u; ribF[o++] = 1; ribF[o++] = br; ribF[o++] = kv;
+          ribF[o++] = u; ribF[o++] = vsg; ribF[o++] = br; ribF[o++] = kv;
         }
       }
     }
@@ -2006,7 +2442,19 @@
         sh.r += sh.speed * dt;
         var f = 1 - sh.r / sh.maxR;
         if (f <= 0) { sh.active = false; continue; }
-        sh.alpha = f * f * Math.min(1, sh.strength);
+        /* BIRTH RAMP (mandatory fix 2, the last hot spot): the shell used to be
+           at FULL alpha at r=0 — i.e. its brightest instant was the one where
+           it sat exactly on top of the crown, and shell + crown + apex star
+           stacked additively to a white blowout on the very frame the owner
+           looks at. Ramping it in over the first quarter of its travel means
+           the sonar now EMERGES from her and brightens as it clears the bell,
+           which is both the correct sonar read and a hard fix for the stack.
+           pulse()/setActivity semantics are untouched: same ring, same speed,
+           same decay — only the first ~quarter-second of alpha changes. */
+        var g = sh.r / sh.maxR;
+        var born = g < 0.26 ? g / 0.26 : 1;
+        born = born * born * (3 - 2 * born);
+        sh.alpha = f * f * born * Math.min(1, sh.strength);
       }
       if (flash.active) {
         flash.t += dt;
@@ -2018,6 +2466,9 @@
       if (pulsePhase > TWO_PI) { pulsePhase -= TWO_PI; }
       flare *= Math.max(0, 1 - dt * 1.8);
       kink *= Math.max(0, 1 - dt * 1.9);
+      /* the wings hold their sweep longer than the flesh holds its flare —
+         the angel takes her time settling */
+      wingFlare *= Math.max(0, 1 - dt * 1.05);
       /* click ripple sweeping the star-motes: radius expands, light decays
          (both bounded — the radius freezes once the amplitude dies) */
       if (ripA > 0) {
@@ -2060,13 +2511,25 @@
       flutPh = (timeS * 4.2) % TWO_PI;
       rayPh = (timeS * 0.23) % TWO_PI;
       starTw = (timeS * 2.7) % TWO_PI;
+      crownPh = (timeS * 0.9) % TWO_PI;
       var hdx = heroPX - eyeX, hdy = heroPY - eyeY, hdz = HERO_Z - eyeZ;
       var hDist = Math.sqrt(hdx * hdx + hdy * hdy + hdz * hdz);
-      heroBright = Math.exp(-hDist * FOG_D) * (0.9 + 0.25 * activity) * (1 + 0.5 * Math.min(flare, 1.5));
+      /* SATURATING FLARE DRIVE (mandatory fix 2, real-app pass). The bloom
+         boost used to be linear in flare, so bell + aureole + star all rose
+         together and their additive sum crossed white at the crown on the
+         sonar frame. flS saturates (1.5 -> 0.82), which keeps the visible
+         surge but stops the stack from running away. */
+      var flL = Math.min(flare, 1.5);
+      var flS = flL / (1 + 0.55 * flL);
+      heroBright = Math.exp(-hDist * FOG_D) * (0.9 + 0.25 * activity) * (1 + 0.5 * flS);
       /* apex star: gentle multi-sine twinkle; the sonar bloom makes it flare
          hard, then it settles as the flare energy decays */
-      starInt = heroBright * (0.42 + 0.10 * Math.sin(timeS * 2.1) + 0.07 * Math.sin(timeS * 3.7)) *
-        (1 + 1.05 * Math.min(flare, 1.5));
+      /* the flare boost is 0.70 (was 1.05): the star layer is hue-bounded on
+         its own, but it is composited ON TOP of the aureole, and 1.05 drove
+         the pair past white at the apex on the exact frame the sonar fires.
+         The crown still visibly flares — it just flares gold, not white. */
+      starInt = heroBright * (0.58 + 0.10 * Math.sin(timeS * 2.1) + 0.07 * Math.sin(timeS * 3.7)) *
+        (1 + 0.58 * flS);
 
       /* contrast staging: project the hero into backdrop uv space so the
          water directly behind the creature runs a stop darker (scalar math
@@ -2270,12 +2733,13 @@
       gl.useProgram(progStar.p);
       gl.uniformMatrix4fv(progStar.u_vp, false, mVP);
       gl.uniform3f(progStar.u_pos,
-        heroPX + m9[3] * 0.34, heroPY + m9[4] * 0.34, HERO_Z + m9[5] * 0.34);
+        heroPX + m9[3] * 0.66, heroPY + m9[4] * 0.66, HERO_Z + m9[5] * 0.66);
       gl.uniform3f(progStar.u_right, rgt[0], rgt[1], rgt[2]);
       gl.uniform3f(progStar.u_up, upv[0], upv[1], upv[2]);
-      gl.uniform1f(progStar.u_size, heroScale * (0.52 + 0.20 * Math.min(flare, 1.5)));
+      gl.uniform1f(progStar.u_size, heroScale * (0.66 + 0.16 * Math.min(flare, 1.5)));
       gl.uniform1f(progStar.u_int, starInt);
       gl.uniform1f(progStar.u_tw, starTw);
+      gl.uniform1f(progStar.u_cr, crownPh);
       gl.uniform1f(progStar.u_floor, heroFloor);
       gl.uniform3f(progStar.u_dimD, dimL * DPR, dimR * DPR, 120 * DPR);
       bindQuad();
@@ -2515,6 +2979,8 @@
       var sc = Math.min(s, 3);
       flare = Math.min(1.5, flare + 0.45 * sc);
       kink = Math.min(1.2, kink + 0.45 * sc);   /* arms the zigzag whip term */
+      /* the wings answer the scan: they SWEEP open and burn brighter */
+      wingFlare = Math.min(1.5, wingFlare + 0.62 * sc);
       var hdx = heroX - px, hdy = heroY - py;
       var hdd = Math.sqrt(hdx * hdx + hdy * hdy) + 0.001;
       var himp = sc * 0.55 / (1 + hdd * 0.22);
@@ -2522,6 +2988,7 @@
       heroVY += hdy / hdd * himp;
       var ci, kk;
       for (ci = 0; ci < CHAINS; ci++) {
+        if (chKind[ci] === 2) { continue; }   /* wings answer via wingFlare */
         var off2 = chOff[ci], len2 = chLen[ci];
         for (kk = 1; kk < len2; kk++) {
           var q3 = (off2 + kk) * 3;
