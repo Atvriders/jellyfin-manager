@@ -775,9 +775,9 @@
     var N_SIL = 6;                   /* distant silhouettes */
     var CH_TENT = 32, TENT_NODES = 24;    /* marginal tentacles (verlet) */
     var CH_ARM = 4, ARM_NODES = 16;       /* frilled oral arms (verlet) */
-    /* RELIQUARY: the kind-2 ribbon-WINGS are gone — chains, tables, shader
-       branch and their share of the node budget (300 nodes, 1740 ribbon
-       indices) all reclaimed. She is adorned, not costumed. */
+    /* the kind-2 ribbon-WINGS are gone — chains, tables, shader branch and
+       their share of the node budget (300 nodes, 1740 ribbon indices) all
+       reclaimed. She is adorned, not costumed. */
     var CHAINS = CH_TENT + CH_ARM;
     var TOTAL_NODES = CH_TENT * TENT_NODES + CH_ARM * ARM_NODES;   /* 832 */
     var TENT_LEN = 1.55, ARM_LEN = 1.05;  /* in bell-local units */
@@ -860,12 +860,11 @@
 
     /* ribbon vertex stream: 2 verts per node, 9 floats per vert (PREALLOCATED;
        the only per-frame GPU upload besides the tiny shell pack). The last
-       three floats are the KEY LIGHT resolved into that node's own ribbon
-       frame (across, along) plus the strand's true half-width in u units:
-       the light frame is what lets a stone set on a swinging arm throw its
-       glint from the true direction, and the half-width is what keeps a set
-       stone perfectly ROUND on a strand that tapers and ripples. */
-    var ribF = new Float32Array(TOTAL_NODES * 2 * 10);
+       two floats are the KEY LIGHT resolved into that node's own ribbon frame
+       (across, along) — the light frame is what lets a gold ferrule on a
+       swinging strand catch the light from the true direction instead of
+       carrying a baked-in highlight. */
+    var ribF = new Float32Array(TOTAL_NODES * 2 * 9);
     /* normalize(vec3(0.30, 1.0, 0.16)) — the same key light the bell shades to */
     var LKX = 0.284034, LKY = 0.946779, LKZ = 0.151485;
 
@@ -891,51 +890,41 @@
     })();
 
     /* ascending star-motes: instance data, preallocated once
-       (ox, oy0, oz, size | rise rate, seed, twinkle rate, alpha |
-        cut kind, spin seed, tumble axis, -) —
+       (ox, oy0, oz, size | rise rate, seed, twinkle rate, alpha | tag) —
        radius biased inward so the dust is dense near her, sparse far.
        The motes' u_time is bounded: uploaded as timeS % MOTE_T, so every
        rate is quantized at build time to whole cycles per MOTE_T (rise to
        k*span/T, twinkle to k*2pi/T; granularity ~0.01 — imperceptible) and
        the wrap at T is seamless. Keeps fp32 phase math precise forever.
 
-       INSTANCE 0 IS HER NUCLEUS (cut kind 9). It rides this same stream and
-       this same draw, emitting alpha 0 so it composites ADDITIVELY inside the
-       premultiplied pass the cut stones use. That is what reclaimed the old
-       apex-star draw call: the whole jewelled cloud now costs nothing extra.
-       Slot 0 is the ONLY dynamic part of the buffer (48 bytes/frame). */
+       INSTANCE 0 IS HER NUCLEUS (tag 9; every mote is 0). It rides this same
+       stream and this same draw, which is what retired the old separate
+       apex-star call — the cloud carries her core for free.
+       Slot 0 is the ONLY dynamic part of the buffer (36 bytes/frame). */
     var MOTE_T = 600;                /* shared mote period, seconds */
     var N_MOTE = 90;                 /* buffer holds all; mobile draws fewer */
+    var MOTE_STRIDE = 9;             /* floats per instance */
     var moteCount = N_MOTE + 1;
-    var moteF = new Float32Array((N_MOTE + 1) * 12);
-    var moteHead = new Float32Array(12);   /* per-frame nucleus instance */
+    var moteF = new Float32Array((N_MOTE + 1) * MOTE_STRIDE);
+    var moteHead = new Float32Array(MOTE_STRIDE);   /* per-frame nucleus */
     (function () {
       function fr(x) { var s = Math.sin(x) * 43758.5453; return s - Math.floor(s); }
       var i, o;
       for (i = 0; i < N_MOTE; i++) {
-        o = (i + 1) * 12;
+        o = (i + 1) * MOTE_STRIDE;
         var rr = Math.pow(fr(i * 12.9898 + 1.3), 1.7) * 3.4 + 0.3;
         var aa = fr(i * 78.233 + 2.1) * TWO_PI;
         moteF[o] = Math.cos(aa) * rr;
         moteF[o + 1] = fr(i * 3.7 + 0.7) * 6.5;
         moteF[o + 2] = (fr(i * 9.1 + 4.2) - 0.5) * 2.4;
-        /* a fifth of the field are JEWELS (large enough to hold facets); the
-           rest stay fine gold dust, which is what keeps the jewels precious */
-        var jewel = fr(i * 31.7 + 6.4) > 0.845;
-        moteF[o + 3] = jewel
-          ? 0.046 + 0.020 * fr(i * 5.3 + 3.3)
-          : 0.028 + 0.028 * fr(i * 5.3 + 3.3);
+        moteF[o + 3] = 0.05 + 0.075 * fr(i * 5.3 + 3.3);
         moteF[o + 4] = Math.round((0.28 + 0.5 * fr(i * 7.7 + 0.2))
           * MOTE_T / 6.5) * 6.5 / MOTE_T;
         moteF[o + 5] = fr(i * 11.3 + 5.9) * TWO_PI;
         moteF[o + 6] = Math.round((1.4 + 2.6 * fr(i * 17.9 + 2.7))
           * MOTE_T / TWO_PI) * TWO_PI / MOTE_T;
         moteF[o + 7] = (0.30 + 0.45 * fr(i * 23.1 + 8.8)) * Math.max(0.25, 1.2 - 0.22 * rr);
-        /* kind 0..3 = diamond / ruby / emerald / sapphire, 4 = gold dust */
-        moteF[o + 8] = jewel ? Math.floor(fr(i * 41.3 + 9.7) * 4) : 4;
-        moteF[o + 9] = fr(i * 53.9 + 1.9) * TWO_PI;   /* cut orientation seed */
-        moteF[o + 10] = fr(i * 61.1 + 7.3) * TWO_PI;  /* tumble-axis seed */
-        moteF[o + 11] = 0;
+        moteF[o + 8] = 0;             /* tag: 0 = dust, 9 = her nucleus */
       }
     })();
 
@@ -952,6 +941,37 @@
     var api = { mount: mount, pulse: pulse, setActivity: setActivity, detach: detach, onFatal: null };
 
     /* -------------------------------------------------------------- shaders */
+
+    /* MEDIUMP-SAFE VALUE HASH (shared by the backdrop grain and the bell).
+       The textbook fract(sin(dot(p, k)) * 43758.5453) is DEAD CODE on a real
+       fp16 mediump part, which is most phones: sin() lands in [-1,1], the
+       product spans +/-43758, and the fp16 ulp up there is 32 -- every
+       representable value is already an integer, so fract() returns exactly
+       0.0 for every fragment. Simulated over the domains this engine actually
+       samples, the old hash gave vnoise a mean of 0.00 and a standard
+       deviation of 0.03 (identically 0.000, one unique value, over the
+       mesoglea's own domain) instead of 0.50/0.21 -- which flattened the
+       mesoglea and the gonad granularity, pinned the chased-metal texture to
+       a constant, and straightened all eight meridians into the identical CNC
+       wires the per-seam wander exists to prevent. Feeding it screen pixels
+       was worse still: dot(gl_FragCoord.xy, vec2(12.9898, 78.233)) reaches
+       ~72,000 at 1280x713, past fp16's 65504 ceiling, so sin(inf) = NaN on
+       23,365 of 912,640 pixels.
+
+       This is the same reasoning that already produced the golden-ratio seed
+       for the meridian gauge below, generalised: no sin(), no large constant,
+       every intermediate under 40 even when p reaches the widest domain here
+       (phi * 9.0). Two decorrelating rounds on a low-discrepancy fold. Under
+       simulated fp16 it holds mean 0.50 / std 0.21 -- matching its own fp32
+       output -- with neighbour correlation 0.004 across the lattice. */
+    var HASH_GLSL = [
+      'float vhash(vec2 p) {',
+      '  vec2 g = fract(p * vec2(0.3819660, 0.6180340) + 0.11);',
+      '  g = fract(vec2(g.x * (g.y * 8.0 + 1.7), g.y * (g.x * 8.0 + 1.7)));',
+      '  return fract(g.x * 3.7 + g.y * 1.3);',
+      '}'
+    ].join('\n');
+
     var BACK_VS = [
       'attribute vec2 a_p;',
       'varying vec2 v_uv;',
@@ -973,6 +993,7 @@
       /* nature-documentary staging: a soft dark pocket of water directly
          behind the hero so the luminous creature pops off the frame */
       'uniform vec4 u_hero;',   /* uv.x, uv.y, radius (v units), strength */
+      HASH_GLSL,
       /* Ascension: every shaft is aimed at the Medusa — they spread apart at
          the surface and converge on her anchor (u_hero.xy), an annunciation
          column; the light dies just below her so she stands at its foot */
@@ -1024,8 +1045,12 @@
       '  col *= 1.0 - 0.35 * smoothstep(0.35, 1.15, length(cc));',
       /* (the Seraph mandorla ring is deleted: no icon-grade halo behind her —
          the divinity that stays is the CONVERGING LIGHT, not the iconography) */
-      /* fine photographic grain: kills the flat-gradient CG look of the water */
-      '  float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);',
+      /* fine photographic grain: kills the flat-gradient CG look of the water.
+         gl_FragCoord is folded into a 64px cell BEFORE hashing: raw pixel
+         coordinates run to 2560 at DPR 2, and any hash fed numbers that large
+         has already lost per-pixel distinctness on an fp16 part. The tile
+         repeats, but at +/-0.005 amplitude on a static field it is invisible. */
+      '  float grain = vhash(mod(gl_FragCoord.xy, 64.0));',
       '  col += (grain - 0.5) * 0.010;',
       '  gl_FragColor = vec4(col, 1.0);',
       '}'
@@ -1043,96 +1068,6 @@
       '}'
     ].join('\n');
 
-    /* ------------------------------------------------------------- stones */
-    /* ONE cut-stone model, shared by the bell and by the arms, so every gem in
-       the frame is the same jeweller's work.
-       It is evaluated in the STONE'S OWN frame: d is the offset from the
-       stone's centre in the plane of its setting, and Ls / Vs are the light
-       and eye directions expressed in that frame (xy in-plane, z along the
-       setting normal). The caller supplies those, so a stone set in the
-       turning bell catches the light differently from one swinging on an arm —
-       the glint MOVES instead of being baked in.
-       The cut: a table, eight star facets, eight staggered bezel facets, a
-       girdle, and the gold collet it is set into. Facet normals are real, so
-       the highlight lands on some facets and not on others. Never a flat dot. */
-    var STONE_GLSL = [
-      'vec3 gemTint(float k) {',
-      '  if (k < 0.5) { return vec3(0.84, 0.91, 1.00); }',   /* diamond */
-      '  if (k < 1.5) { return vec3(0.92, 0.05, 0.16); }',   /* ruby     */
-      '  if (k < 2.5) { return vec3(0.04, 0.78, 0.36); }',   /* emerald  */
-      '  return vec3(0.09, 0.30, 0.98);',                    /* sapphire */
-      '}',
-      'vec4 cutStone(vec2 d, float rad, float kind, vec3 Ls, vec3 Vs, float fireK) {',
-      '  float gr = length(d) / max(rad, 1e-4);',
-      '  if (gr > 1.20) { return vec4(0.0); }',
-      '  float ang = atan(d.y, d.x + 1e-5);',
-      '  float SEG = 0.7853982;',                 /* eight-fold: a brilliant cut */
-      '  float fc = (floor(ang / SEG) + 0.5) * SEG;',
-      '  float fd = (floor(ang / SEG + 0.5)) * SEG;',   /* staggered ring */
-      /* OCTAGONAL isolines, not circles: the table is a flat octagon and every
-         facet course is a straight-edged band. This one substitution is what
-         separates a cut stone from a coloured dot. */
-      '  float o1 = gr * cos(ang - fc);',
-      '  float o2 = gr * cos(ang - fd);',
-      '  float tbl = 1.0 - smoothstep(0.300, 0.322, o1);',
-      '  float st = smoothstep(0.300, 0.322, o1) * (1.0 - smoothstep(0.610, 0.632, o2));',
-      '  float bz = smoothstep(0.610, 0.632, o2) * (1.0 - smoothstep(0.968, 0.990, o1));',
-      /* real facet normals: the crown facets tilt outward, the staggered ring
-         tilts harder — so the key light lands on SOME facets and misses others */
-      '  vec2 dir1 = vec2(cos(fc), sin(fc));',
-      '  vec2 dir2 = vec2(cos(fd), sin(fd));',
-      '  vec3 gn = normalize(vec3(dir1 * (0.46 * st) + dir2 * (1.05 * bz), 1.0));',
-      '  vec3 Hs = normalize(Ls + Vs);',
-      '  float dl = max(dot(gn, Ls), 0.0);',
-      '  float glint = pow(max(dot(gn, Hs), 0.0), 90.0);',
-      '  vec3 L2 = normalize(vec3(-0.60, -0.34, 0.72));',
-      '  float glint2 = pow(max(dot(gn, normalize(L2 + Vs)), 0.0), 24.0);',
-      '  float depth = sqrt(max(1.0 - gr * gr, 0.0));',
-      '  vec3 tint = gemTint(kind);',
-      /* COLOURED DEPTH + hard per-facet steps: the body colour is saturated
-         where the light has travelled through the stone and nearly black on the
-         facets turned away. A flat swatch has neither. */
-      /* a diamond is COLOURLESS: it reads by contrast — dark facets and hard
-         white flashes — so its body is held well down. Painting it as a pale
-         solid is exactly how a cut stone turns into a blown-out blob. */
-      '  float bodyK = kind < 0.5 ? 0.52 : 1.0;',
-      '  vec3 col = tint * (0.09 + 0.55 * depth * depth) * (0.26 + 1.20 * dl) * bodyK;',
-      /* through the TABLE you look down onto the pavilion: an eight-point dark
-         star of internal reflections, plus the light coming back up the culet */
-      '  float pav = 0.5 + 0.5 * cos(ang * 8.0 + 0.55);',
-      '  col *= mix(1.0, mix(0.40, 1.30, pav), tbl);',
-      '  col += tint * tbl * pow(max(dot(gn, Vs), 0.0), 3.0) * (0.14 + 0.30 * depth);',
-      /* FACET JUNCTIONS: the wire-thin bright lines where two facets meet —
-         three courses of them plus the radial ribs, all hard-edged */
-      '  float e1 = exp(-pow((o1 - 0.311) / 0.013, 2.0));',
-      '  float e2 = exp(-pow((o2 - 0.621) / 0.013, 2.0));',
-      '  float e3 = exp(-pow((o1 - 0.979) / 0.014, 2.0));',
-      '  float rj = smoothstep(0.84, 1.0, abs(fract(ang / SEG) - 0.5) * 2.0) * (st + bz);',
-      '  vec3 bright = mix(tint, vec3(1.0), 0.62);',
-      '  col += bright * (e1 * 0.30 + e2 * 0.26 + e3 * 0.42 + rj * 0.30);',
-      /* the glints themselves: white-hot, hard, riding one or two facets only */
-      '  float crown = st + bz;',
-      '  col += vec3(1.0) * glint * 1.70 * crown',
-      '       + mix(tint, vec3(1.0), 0.7) * glint2 * 0.42 * (0.30 + 0.70 * crown);',
-      /* FIRE — diamond ONLY, and only where a facet is ALREADY flashing. It is
-         the glint that splits into spectrum, not the body of the stone: a
-         white stone stays white until it fires. (The broad term this replaced
-         painted pastel wedges across the whole face, which is a beach ball
-         rather than a brilliant, and it tinted coloured stones too.) */
-      '  float fp = gr * 19.0 + ang * 3.0;',
-      '  vec3 fire = vec3(0.5 + 0.5 * sin(fp), 0.5 + 0.5 * sin(fp + 2.094),',
-      '                   0.5 + 0.5 * sin(fp + 4.188));',
-      '  col += (fire - 0.5) * glint * 1.85 * crown * fireK;',
-      '  float cov = 1.0 - smoothstep(0.975, 1.015, gr);',
-      /* the GOLD COLLET it is set into: a raised rim of metal, bright on the
-         side the key light comes from. This is what makes it read as SET. */
-      '  float bel = smoothstep(0.978, 1.010, gr) * (1.0 - smoothstep(1.150, 1.215, gr));',
-      '  float bl = 0.5 + 0.5 * dot(normalize(d + 1e-5), normalize(Ls.xy + 1e-5));',
-      '  col += vec3(1.00, 0.68, 0.20) * bel * (0.34 + 0.95 * bl);',
-      '  col += vec3(1.00, 0.95, 0.80) * bel * pow(bl, 4.0) * 0.55;',
-      '  return vec4(col, min(cov + bel * 0.80, 1.0));',
-      '}'
-    ].join('\n');
 
     /* The Medusa's bell: generated in the vertex shader from (t, phi) so the
        traveling contraction wave produces CORRECT normals (finite differences
@@ -1178,7 +1113,7 @@
       'varying vec3 v_lp;',
       'varying float v_dim;',
       /* surface tangents, world space: the goldsmithing needs a frame ON the
-         bell (across a band and along it) to light metal and set stones in */
+         bell (across a band and along it) to light the metal bands in */
       'varying vec3 v_tt;',
       'varying vec3 v_tf;',
       DIM_GLSL,
@@ -1230,9 +1165,11 @@
          FLASH as the wave runs under it, not merely to deform with it. */
       'uniform float u_pwF;',
       'uniform mat3 u_mi;',     /* inverse bell model: world dir -> bell local */
-      /* value noise for the mesoglea: continuous in bell-local space (no seam) */
-      STONE_GLSL,
-      'float vhash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }',
+      /* value noise for the mesoglea and the goldwork: continuous in bell-local
+         space (no seam). vhash is the shared mediump-safe hash declared with
+         the shaders above -- see the note there for why the textbook
+         fract(sin(x) * 43758.5453) cannot be used in a mediump stage. */
+      HASH_GLSL,
       'float vnoise(vec2 p) {',
       '  vec2 i = floor(p); vec2 f = fract(p);',
       '  f = f * f * (3.0 - 2.0 * f);',
@@ -1370,14 +1307,15 @@
       '  float ridge = pow(abs(cos(phi * 16.0)), 2.4);',
       '  float collar = smoothstep(0.885, 0.935, t) * (1.0 - smoothstep(0.982, 1.0, t));',
       '  col += vec3(0.48, 0.52, 0.82) * collar * (0.13 + 0.30 * ridge) * (0.7 + 0.5 * u_sg);',
-      /* ================ THE RELIQUARY ================================
+      /* ================ THE GOLDWORK ==================================
          Byzantine goldsmithing laid ON the glass: eight cloisonné meridian
          strips running from the apex collar to the hem, a beaded collar band
-         and a beaded hem band, and stones SET IN COLLETS at measured
-         intervals. Every one of them is a function of (t, phi) — the SAME two
-         parameters the vertex shader deforms into the traveling contraction
-         wave — so the metal RIDES the surface: when the bell kicks, the gold
-         kicks with it. Nothing slides over the glass.
+         and a beaded hem band. No stones — the courses run UNBROKEN from the
+         shoulder to the rim, which is the whole point of the pass: clean
+         metal on living glass. Every band is a function of (t, phi) — the
+         SAME two parameters the vertex shader deforms into the traveling
+         contraction wave — so the metal RIDES the surface: when the bell
+         kicks, the gold kicks with it. Nothing slides over the glass.
          The metal is lit AS metal: each band carries its own rounded
          cross-section normal, so a highlight runs down its crest and moves
          with the view, instead of being a flat painted stripe. */
@@ -1389,19 +1327,12 @@
       '  float SEG8 = 0.7853982;',
       '  float mid8 = floor(phi / SEG8 + 0.5);',
       '  float dph = phi - mid8 * SEG8;',
-      /* the lesser course sits half a meridian round, so the two courses
-         interlock instead of stacking (declared here: the metal needs it to
-         know where to break for a setting) */
-      '  float dph2 = phi - (floor(phi / SEG8) + 0.5) * SEG8;',
-      '  float ct2 = cos(t * 2.05), st2 = sin(t * 2.05);',
-      '  float arcR = max(st2, 0.015);',
-      '  float dsdt = 2.05 * sqrt(ct2 * ct2 + 0.36 * st2 * st2);',
+      '  float arcR = max(sin(t * 2.05), 0.015);',
       /* --- PER-SEAM GAUGE AND WANDER. Eight wires drawn to identical width,
              identical spacing and dead-straight lines is machine work — it is
              what makes gold read as a decal. Each meridian is drawn to its own
              gauge off its index, and wanders by a few thousandths of an
-             arc-unit as it runs down: hand-drawn, not CNC. The stones are set
-             INTO the wire, so they wander with it. */
+             arc-unit as it runs down: hand-drawn, not CNC. */
       /* MEDIUMP-SAFE SEED. The usual fract(sin(x)*43758.5453) is dead code on
          a phone: mediump only guarantees a range of +/-2^14, and even where it
          reaches 43758 the fp16 ulp up there is 32, so the product is already an
@@ -1464,17 +1395,9 @@
          apex-to-margin down the wires every time she kicks. Bounded phase. */
       '  float ctrF = max(sin(u_pwF - t * 2.2), 0.0);',
       '  float flashG = 0.90 + 0.30 * ctrF * ctrF;',
-      /* --- A BEZEL INTERRUPTS THE BAND. The wire runs INTO the collet and
-             stops there: a real setting is a break in the metal course, not a
-             stripe painted straight across the table of the stone. */
-      '  float ao1 = min(length(vec2(sarc, (t - 0.455) * dsdt)) / 0.078, 4.0);',
-      '  float ao2 = min(length(vec2(dph2 * arcR, (t - 0.222) * dsdt)) / 0.040, 4.0);',
-      '  float setCut = clamp((1.0 - smoothstep(1.00, 1.19, ao1))',
-      '                     + (1.0 - smoothstep(1.00, 1.19, ao2)), 0.0, 1.0);',
-      '  strip *= 1.0 - setCut;',
-      '  groove *= 1.0 - setCut;',
-      '  fork *= 1.0 - setCut;',
-      '  col1 *= 1.0 - setCut;',
+      /* NO SETTINGS. The courses are unbroken metal: nothing cuts the wire,
+         nothing interrupts the collar or the hem. Where a stone used to sit
+         the band simply carries straight on. */
       '  vec3 metal = vec3(0.0);',
       '  metal += (gold * (0.30 + 0.95 * dM) * 1.05 + goldHot * sM * 1.55) * (strip + fork * 0.86) * chase;',
       '  metal += (gold * (0.30 + 0.95 * dH) * 1.00 + goldHot * sH * 1.45)',
@@ -1486,40 +1409,16 @@
       /* the groove is a SHADOW in the glass beside the wire: it is what makes
          the eye read the band as sitting on top of the bell */
       '  col *= 1.0 - 0.30 * groove * u_pass;',
-      /* --- THE PRINCIPAL COURSE: eight stones, one per meridian, set in
-             collets on the shoulder of the bell. Diamond, ruby, emerald,
-             sapphire, repeating — measured, symmetric, a jeweller's rhythm.
-             Front wall only, and faded where the setting turns edge-on. */
-      '  vec3 Ls3 = normalize(vec3(dot(L, Tg), dot(L, Bg), dot(L, ns)));',
-      '  vec3 Vs3 = normalize(vec3(dot(-v, Tg), dot(-v, Bg), dot(-v, ns)));',
-      '  float gkind = mod(mid8, 4.0);',
-      '  vec4 stone = cutStone(vec2(sarc, (t - 0.455) * dsdt), 0.078, gkind,',
-      '    Ls3, Vs3, gkind < 0.5 ? 1.0 : 0.0);',
-      /* the LESSER COURSE: eight smaller stones on the collar band, offset by
-         half a meridian so the two courses interlock instead of stacking —
-         the alternation is what makes it read as designed metalwork. */
-      '  float kind2 = mod(floor(phi / SEG8) + 2.0, 4.0);',
-      '  vec4 stone2 = cutStone(vec2(dph2 * arcR, (t - 0.222) * dsdt), 0.040, kind2,',
-      '    Ls3, Vs3, kind2 < 0.5 ? 1.0 : 0.0);',
-      '  float sfac = u_pass * smoothstep(0.10, 0.40, ndv) * (0.72 + 0.46 * u_sg);',
-      /* the setting's own shadow on the glass: a soft dark halo just outside
-         each collet. Without it a stone floats; with it, it is MOUNTED. */
-      /* (ao1/ao2 are computed up with the metal, which needs them to break the
-         wire at each setting; the ratios are clamped before they are squared,
-         because a fragment far from a setting can drive (r-1.3)/0.42 past 90,
-         and 90^2 overflows mediump fp16 (65504) to inf on real mobile parts.
-         exp(-46) is already 0, so clamping at 4 is the same picture without
-         ever touching the ceiling.) */
-      '  col *= 1.0 - 0.34 * u_pass * (exp(-pow((ao1 - 1.28) / 0.40, 2.0))',
-      '                              + exp(-pow((ao2 - 1.30) / 0.42, 2.0)));',
-      '  col += (stone.rgb + stone2.rgb) * sfac;',
+      /* how much METAL this fragment is covered by: it drives the alpha
+         ceiling below, so a gold band still occludes the jelly behind it. */
+      '  float gcov = clamp((strip + fork * 0.86 + hem * hemBead',
+      '                    + col1 * colBead) * u_pass, 0.0, 1.0);',
       /* translucent body: alpha dims what is behind (premultiplied over).
-         Metal and set stones are OPAQUE — they must occlude the jelly behind
-         them or they read as decals floating in the water. */
+         The metal is OPAQUE — it must occlude the jelly behind it or the
+         bands read as decals floating in the water. */
       '  float al = (0.12 + 0.18 * ndw + 0.15 * gon * face * u_pass',
       '    + 0.20 * collar * u_pass) * dens;',
       '  al += (strip * 0.34 + hem * 0.40 + col1 * 0.30 + hemWire * 0.16) * u_pass;',
-      '  al += (stone.a + stone2.a) * 0.72 * sfac;',
       '  al *= mix(0.38, 1.0, u_pass);',        /* the far wall barely occludes */
       '  col *= mix(0.72, 1.0, u_pass);',
       /* far-wall margin dissolve: the back wall melts to nothing toward its
@@ -1535,10 +1434,9 @@
       '  col *= 1.0 - 0.70 * u_pass * exp(-pow(t / 0.24, 2.0));',
       '  col *= u_glow * v_dim;',
       '  col = tonemap(col);',
-      /* the ceiling lifts only under a set stone: metal and gems occlude the
-         jelly behind them (0.92) while the glass itself stays translucent */
-      '  al = clamp(al, 0.0, mix(0.62, 0.92,',
-      '    clamp((stone.a + stone2.a) * sfac, 0.0, 1.0))) * v_dim;',
+      /* the ceiling lifts only under the metal: a gold band occludes the jelly
+         behind it (0.88) while the glass itself stays translucent (0.62) */
+      '  al = clamp(al, 0.0, mix(0.62, 0.88, gcov)) * v_dim;',
       '  gl_FragColor = vec4(col, al);',
       '}'
     ].join('\n');
@@ -1548,13 +1446,13 @@
     var RIB_VS = [
       'attribute vec3 a_pos;',
       'attribute vec4 a_aux;',   /* u along, side -1..1, brightness, kind */
-      'attribute vec3 a_lit;',   /* key light (across, along) + half-width in u */
+      'attribute vec2 a_lit;',   /* key light in the ribbon frame (across, along) */
       'uniform mat4 u_vp;',
       'uniform vec2 u_dim;',
       'uniform float u_vpw;',
       'uniform float u_floor;',
       'varying vec4 v_aux;',
-      'varying vec3 v_lit;',
+      'varying vec2 v_lit;',
       'varying float v_dim;',
       DIM_GLSL,
       'void main() {',
@@ -1569,26 +1467,23 @@
     var RIB_FS = [
       'precision mediump float;',
       'varying vec4 v_aux;',
-      'varying vec3 v_lit;',
+      'varying vec2 v_lit;',
       'varying float v_dim;',
       'uniform float u_wob;',
-      STONE_GLSL,
       'void main() {',
       '  float u = v_aux.x;',
       '  float vv = v_aux.y;',
       '  float br = v_aux.z * v_dim;',
       '  vec3 col;',
       '  float a;',
-      /* ADORNMENT accumulator: metal and stones are their own radiance, never
-         a tint on the tissue alpha — a ferrule at the feather-thin edge of a
-         strand must still read as solid metal. */
+      /* ADORNMENT accumulator: the metal is its own radiance, never a tint on
+         the tissue alpha — a ferrule at the feather-thin edge of a strand
+         must still read as solid metal. */
       '  vec3 orn = vec3(0.0);',
       /* the key light resolved into THIS node ribbon frame (across, along),
          uploaded per node; z is the part pointing back at the eye */
-      '  vec2 lxy = v_lit.xy;',
+      '  vec2 lxy = v_lit;',
       '  vec3 Ls = vec3(lxy, sqrt(max(1.0 - dot(lxy, lxy), 0.05)));',
-      '  float hwu = max(v_lit.z, 1e-4);',   /* half-width in u units */
-      '  vec3 Vs = vec3(0.0, 0.0, 1.0);',
       '  if (v_aux.w < 0.5) {',
       /* fine marginal tentacle: soft round core + wet specular filament;
          nematocyst beads swell/shimmer down the strand (per-chain phase) */
@@ -1615,45 +1510,26 @@
       /* ---- HIERARCHY. All thirty-two strands wear ONE ferrule immediately
          below the mantle: fixed in u, so the thirty-two land at the same
          height and read as a single beaded collar running round the hem
-         rather than as scattered ticks. Only every FOURTH strand is carried
-         on down as a jewelled pendant — banded at measured intervals with a
-         stone set in the second and third bands. Eight pendants, twenty-four
-         plain strands: that is the difference between goldsmithing and
-         glitter. */
+         rather than as scattered ticks. Every FOURTH strand carries the full
+         course on down — four bands at measured intervals, linked by a fine
+         gold shank so the run reads as one continuous piece of banding rather
+         than loose rings. Eight banded strands, twenty-four plain: that is
+         the difference between goldsmithing and glitter. */
       '    float cid = floor(v_aux.w * 500.0 + 0.5);',
-      '    float pend = mod(cid, 4.0) < 0.5 ? 1.0 : 0.0;',
+      '    float course = mod(cid, 4.0) < 0.5 ? 1.0 : 0.0;',
       '    float ferr = exp(-pow((u - 0.052) / 0.010, 2.0)) * 0.62',
-      '               + pend * (exp(-pow((u - 0.132) / 0.0095, 2.0)) * 0.78',
-      '                       + exp(-pow((u - 0.242) / 0.0085, 2.0)) * 0.50',
-      '                       + exp(-pow((u - 0.392) / 0.0075, 2.0)) * 0.24);',
+      '               + course * (exp(-pow((u - 0.132) / 0.0095, 2.0)) * 0.78',
+      '                         + exp(-pow((u - 0.242) / 0.0085, 2.0)) * 0.50',
+      '                         + exp(-pow((u - 0.392) / 0.0075, 2.0)) * 0.24);',
       '    vec3 gm = mix(vec3(1.00, 0.68, 0.22), vec3(1.00, 0.95, 0.80), pow(prof, 4.0));',
       '    float gsp = pow(max(prof, 0.0), 3.0) * max(Ls.z, 0.0);',
       '    orn += gm * ferr * min(br, 0.56) * (0.34 + 0.80 * gsp) * 0.74;',
-      /* A COLLET NEEDS SOMETHING TO HANG FROM. At 1:1 the strand inside the
-         setting was thinner than the metal around it, so the pendants read as
-         bezels floating free in the water. The tissue SWELLS where a stone is
-         mounted — a real setting is heavier than the wire it hangs on — and a
-         fine gold shank runs from one collet to the next, so the pendant is
-         one continuous jewelled drop instead of two loose rings.
-         The swell is GEOMETRY (buildRibbons widens the quad to enclose each
-         collet); this is only the density lift that goes with it, held low
-         because the fragment count already doubled where the strand bulges. */
-      '    float swell = pend * (exp(-pow((u - 0.132) / 0.028, 2.0)) * 1.00',
-      '                        + exp(-pow((u - 0.242) / 0.022, 2.0)) * 0.60);',
-      '    a *= 1.0 + 0.30 * swell;',
-      '    if (pend > 0.5) {',
-      '      float sk = mod(floor(cid * 0.25), 4.0);',
-      '      float shank = smoothstep(0.130, 0.146, u) * (1.0 - smoothstep(0.230, 0.246, u))',
-      '                  * exp(-pow(vv / 0.50, 2.0));',
-      '      orn += gm * shank * min(br, 0.60) * (0.24 + 0.60 * gsp) * 0.46;',
-      /* the stones are SET INTO the second and third bands, and they shrink as
-         the metal thins toward the tip */
-      '      vec4 sT = cutStone(vec2(vv * hwu, u - 0.132), 0.024, sk, Ls, Vs,',
-      '        sk < 0.5 ? 1.0 : 0.0);',
-      '      vec4 sU = cutStone(vec2(vv * hwu, u - 0.242), 0.013, mod(sk + 2.0, 4.0),',
-      '        Ls, Vs, mod(sk + 2.0, 4.0) < 0.5 ? 1.0 : 0.0);',
-      '      orn += (sT.rgb + sU.rgb) * min(br, 0.90) * 0.62;',
-      '    }',
+      /* the shank: a fine longitudinal wire joining the second band to the
+         third, so the banded run is one piece of metal down the strand */
+      '    float shank = course',
+      '                * smoothstep(0.130, 0.146, u) * (1.0 - smoothstep(0.230, 0.246, u))',
+      '                * exp(-pow(vv / 0.50, 2.0));',
+      '    orn += gm * shank * min(br, 0.60) * (0.24 + 0.60 * gsp) * 0.46;',
       '  } else if (v_aux.w < 1.5) {',
       /* frilled oral arm: soft curtain, ruffle brightens in traveling folds;
          third lace octave + lit hem line give the frill legible structure */
@@ -1689,17 +1565,12 @@
       '    clasp *= hem * (0.45 + 0.75 * body2);',
       '    vec3 gm2 = mix(vec3(1.00, 0.68, 0.22), vec3(1.00, 0.95, 0.80), pow(body2, 3.0));',
       '    orn += gm2 * clasp * min(br, 0.95) * (0.40 + 0.85 * max(Ls.z, 0.0)) * 0.95;',
-      /* the oral arms carry METAL ONLY. Stones set here hang inside the bell's
-         own silhouette, where four of them clump over the gonads and read as
-         candy in the jelly instead of as a jeweller's course — so the arms are
-         banded, and the stones live on the rigid bell and the hanging drape,
-         where a course can actually stay a course. */
       '  }',
       '  vec3 rad = col * a + orn;',
-      /* LUMINANCE-RATIO KNEE on the whole ribbon layer (it now carries metal
-         and cut stones, which are far brighter than tissue): identity below
-         0.60, asymptotic above it. One scalar across rgb, so gold stays gold
-         and a glint can never turn into a white blob on any GPU. */
+      /* LUMINANCE-RATIO KNEE on the whole ribbon layer (it carries metal,
+         which is far brighter than tissue): identity below 0.56, asymptotic
+         above it. One scalar across rgb, so gold stays gold and a highlight
+         can never turn into a white blob on any GPU. */
       '  float L = max(rad.r, max(rad.g, rad.b));',
       '  float Lt = L < 0.56 ? L : 0.56 + 0.36 * (1.0 - exp(-(L - 0.56) / 0.36));',
       '  rad *= Lt / max(L, 1e-4);',
@@ -1892,96 +1763,22 @@
       '}'
     ].join('\n');
 
-    /* ------------------------------------------------------ the loose cut */
-    /* The FREE stones are cut from a richer lapidary than the set stones,
-       because they are seen small and moving: THIRTEEN sectors in two facet
-       rings (the outer offset half a sector), a flat table, a culet star seen
-       up through it, and an octagonal girdle. At the 14-20 px a drifting jewel
-       actually occupies, that facet count is what reads as FACETED; fewer
-       sectors collapse into a coloured spark.
-       Facet normals are lifted into world space through the camera basis
-       (u_rtF / u_upF / u_fwd) so the flash jumps from facet to facet as the
-       stone tumbles. Those uniforms are deliberately NOT named u_right/u_up:
-       a uniform sharing a name across the vertex and fragment stages must
-       agree in precision, and a mediump fragment copy against a highp vertex
-       copy is a link failure on real ES2 drivers. */
-    var LOOSE_GLSL = [
-      'vec4 looseStone(vec2 q, float kind, float spin, vec3 rt, vec3 uv3, vec3 fw, vec3 vd) {',
-      '  float r = length(q) / 0.86;',
-      '  float ang = atan(q.y, q.x + 1e-5);',
-      '  float SEC = 0.4833219466;',              /* 2pi / 13 */
-      /* octagonal-to-polygonal girdle: a hard outline, never a circle */
-      '  float oct = r * (1.0 + 0.030 * cos(13.0 * (ang + spin)));',
-      '  float mask = 1.0 - smoothstep(0.93, 1.00, oct);',
-      '  if (mask <= 0.003) { return vec4(0.0); }',
-      /* two concentric facet rings, the outer offset half a sector */
-      '  float ring = step(0.60, r);',
-      '  float sh = ring * 0.5;',
-      '  float aa = (ang + spin) / SEC + sh;',
-      '  float ai = floor(aa);',
-      '  float af = fract(aa) - 0.5;',
-      '  float ca = (ai + 0.5 - sh) * SEC - spin;',
-      '  float tilt = mix(0.44, 1.00, ring);',
-      '  float tbl = smoothstep(0.46, 0.34, r);',
-      '  vec3 f = normalize(vec3(cos(ca) * tilt, sin(ca) * tilt, 1.0));',
-      '  f = normalize(mix(f, vec3(0.0, 0.0, 1.0), tbl));',
-      '  vec3 n = normalize(rt * f.x + uv3 * f.y + fw * f.z);',
-      '  vec3 L = vec3(0.2873479, 0.9578264, 0.1532522);',
-      '  vec3 H = normalize(L - vd);',
-      '  float nh = max(dot(n, H), 0.0);',
-      '  float nl = max(dot(n, L), 0.0);',
-      /* the flash: a very tight lobe (one facet at a time) over a soft one */
-      '  float glint = pow(nh, 96.0) * 1.24 + pow(nh, 14.0) * 0.44;',
-      '  float fedge = smoothstep(0.42, 0.50, abs(af)) * (1.0 - tbl) * smoothstep(0.30, 0.62, r);',
-      '  float gird = smoothstep(0.76, 0.93, r) * mask;',
-      '  float tedge = exp(-pow((r - 0.425) / 0.024, 2.0));',
-      /* the culet star: the pavilion reflected up through the table. Without
-         it the table is a dead window and the stone reads as a chip. */
-      '  float culet = pow(abs(cos((ang + spin) * 4.0)), 5.0) * smoothstep(0.42, 0.06, r);',
-      '  vec3 deep = vec3(0.30, 0.37, 0.50);',
-      '  vec3 lit = vec3(0.96, 0.98, 1.00);',
-      '  if (kind > 0.5 && kind < 1.5) { deep = vec3(0.44, 0.015, 0.06); lit = vec3(1.00, 0.26, 0.30); }',
-      '  else if (kind > 1.5 && kind < 2.5) { deep = vec3(0.02, 0.46, 0.22); lit = vec3(0.50, 1.00, 0.70); }',
-      '  else if (kind > 2.5) { deep = vec3(0.03, 0.09, 0.40); lit = vec3(0.34, 0.60, 1.00); }',
-      /* colour seen THROUGH depth of stone: the table is the richest window */
-      '  float dep = 1.0 - smoothstep(0.05, 0.86, r);',
-      '  vec3 col = mix(deep, lit, clamp(0.10 + 0.92 * nl, 0.0, 1.0));',
-      '  col *= 0.46 + 0.78 * (1.0 - dep * 0.85);',
-      '  col += lit * (fedge * 0.17 + gird * 0.62 + tedge * 0.14 + culet * 0.13);',
-      '  col *= 1.0 - 0.26 * (1.0 - culet) * smoothstep(0.40, 0.12, r);',
-      /* DISPERSION — diamond only, and only on the facets that are ALREADY
-         flashing. A white stone stays white until it fires; pastel wedges
-         painted across the whole face is a beach ball, not a brilliant. */
-      '  if (kind < 0.5) {',
-      '    float hz = fract(ai * 0.37 + spin * 0.19);',
-      '    vec3 disp = vec3(0.80 + 0.20 * cos(6.2831853 * hz),',
-      '                     0.80 + 0.20 * cos(6.2831853 * hz + 2.0944),',
-      '                     0.80 + 0.20 * cos(6.2831853 * hz + 4.1888));',
-      '    col += (disp - 0.80) * glint * 1.60;',
-      '  }',
-      '  col += mix(vec3(1.0), lit, kind < 0.5 ? 0.0 : 0.55) * glint;',
-      '  return vec4(col, mask * (0.60 + 0.34 * dep));',
-      '}'
-    ].join('\n');
-
-    /* THE JEWELLED CLOUD: celestial dust RISING around the Medusa (the inverse
-       of marine snow), dense near her, sparse far away — a fifth of it now CUT
-       STONES that tumble as they rise, the rest left as plain gold dust so the
-       jewels have something modest to be precious against.
+    /* THE RISING DUST: plain gold/white star-dust drifting UP around the
+       Medusa (the inverse of marine snow), dense near her, sparse far away.
        One instanced draw carries the whole cloud AND, as instance 0, her own
-       luminous NUCLEUS: it emits with alpha 0, so it composites additively
-       inside the same premultiplied pass the stones occlude with. That is how
-       the old apex-star draw call was reclaimed to pay for the jewelling.
+       luminous NUCLEUS: every fragment in this pass emits alpha 0, so the
+       whole layer composites purely additively even though the blend is set
+       premultiplied for the bell. Carrying the nucleus here is what retired
+       the separate apex-star draw call.
        u_time is BOUNDED (timeS % MOTE_T) and every rate — rise, sway,
-       twinkle, tumble — is a whole number of cycles per MOTE_T, so the wrap
-       at T is seamless and mediump never sees an unbounded phase. */
+       twinkle — is a whole number of cycles per MOTE_T, so the wrap at T is
+       seamless and mediump never sees an unbounded phase. */
     var MOTE_VS = [
       'attribute vec2 a_q;',
       'attribute vec4 a_i0;',   /* ox, oy0 (rise offset), oz, size */
       'attribute vec4 a_i1;',   /* rise rate, seed, twinkle rate, alpha */
-      'attribute vec4 a_i2;',   /* cut kind, spin seed, tumble seed, - */
+      'attribute float a_tag;', /* 0 = dust, 9 = her nucleus */
       'uniform mat4 u_vp;',
-      'uniform vec3 u_cam;',
       'uniform vec3 u_right;',
       'uniform vec3 u_up;',
       'uniform vec3 u_hpos;',
@@ -1995,24 +1792,21 @@
       'uniform vec2 u_dim;',
       'uniform float u_vpw;',
       'uniform float u_floor;',
-      'uniform float u_tw;',    /* bounded nucleus twinkle phase */
       'varying vec2 v_q;',
       'varying float v_a;',
-      'varying vec3 v_k;',      /* cut kind, cut phase, opacity */
-      'varying vec3 v_v;',      /* view direction (world) — drives the glint */
+      'varying float v_tag;',   /* 0 = dust, 9 = her nucleus */
       DIM_GLSL,
       'void main() {',
+      '  v_tag = a_tag;',
       /* ---- INSTANCE 0: her nucleus. Placed straight in world space, no
-         rise, no tumble; kind 9 sends it down the additive branch below. */
-      '  if (a_i2.x > 8.5) {',
+         rise; tag 9 sends it down the nucleus branch in the fragment stage. */
+      '  if (a_tag > 8.5) {',
       '    vec3 nw = a_i0.xyz + (u_right * a_q.x + u_up * a_q.y) * a_i0.w;',
       '    gl_Position = u_vp * vec4(nw, 1.0);',
       '    vec4 nc = u_vp * vec4(a_i0.xyz, 1.0);',
       '    float npx = (nc.x / max(nc.w, 0.0001) * 0.5 + 0.5) * u_vpw;',
       '    v_q = a_q;',
       '    v_a = a_i1.w * max(dimBand(npx), u_floor);',
-      '    v_k = vec3(9.0, u_tw, 0.0);',
-      '    v_v = vec3(0.0, 0.0, 1.0);',
       '    return;',
       '  }',
       '  float span = 6.5;',
@@ -2030,38 +1824,19 @@
       '  float lf = smoothstep(0.0, 0.12, lu) * (1.0 - smoothstep(0.80, 1.0, lu));',
       '  float rd = distance(base, u_rip.xyz);',
       '  float rip = u_ripA * exp(-pow((rd - u_rip.w) * 0.7, 2.0));',
-      /* TUMBLE: exactly ten turns per MOTE_T (2pi*10/600) and six for the
-         axis, so the facet wheel returns to its start at the wrap — no pop */
-      '  float spin = a_i2.y + u_time * 0.10471976;',
-      '  float tumb = a_i2.z + u_time * 0.06283185;',
-      /* a loose stone is a DISC turning in the water: squash the quad along
-         its tumble axis so it foreshortens to an ellipse edge-on and opens to
-         a full round face-on. The cut is drawn in UNSQUASHED quad space, so
-         the facets stretch with the ellipse exactly as a real face would. */
-      '  float jw = step(a_i2.x, 3.5);',
-      '  float fore = mix(1.0, 0.30 + 0.70 * abs(cos(tumb)), jw);',
-      '  vec2 td = vec2(cos(a_i2.y), sin(a_i2.y));',
-      '  vec2 qe = a_q - td * dot(a_q, td) * (1.0 - fore);',
-      '  vec3 world = base + (u_right * qe.x + u_up * qe.y) * (a_i0.w * u_hs);',
+      '  vec3 world = base + (u_right * a_q.x + u_up * a_q.y) * (a_i0.w * u_hs);',
       '  gl_Position = u_vp * vec4(world, 1.0);',
       '  vec4 cc = u_vp * vec4(base, 1.0);',
       '  float px = (cc.x / max(cc.w, 0.0001) * 0.5 + 0.5) * u_vpw;',
-      /* SILHOUETTE GATE. The cloud is drawn AFTER the bell now (it has to be:
-         a premultiplied stone must composite over the glass to occlude it),
-         so a free stone crossing her body would paint on top of the creature
-         — candy stuck to the jelly, which is the exact failure the brief
-         forbids. Over her silhouette a stone gives up its alpha entirely and
-         goes additive: it reads as a coloured glimmer IN the water in front
-         of her, or through the lens of her glass behind her, and her flesh
-         survives. Only stones out in open water are allowed to be solid. */
+      /* the cloud is drawn AFTER the bell, so dust crossing her silhouette is
+         held back: it reads as light IN the water in front of her rather than
+         as speckle stuck to the jelly, and her flesh survives. */
       '  float lat = length(base.xy - u_hpos.xy);',
       '  float inb = 1.0 - smoothstep(0.78 * u_hs, 1.16 * u_hs, lat);',
       '  float bhd = step(base.z, u_hpos.z);',
       '  v_a = a_i1.w * tw * lf * (0.78 + 0.44 * u_act) * (1.0 + 2.4 * rip)',
       '      * max(dimBand(px), u_floor) * (1.0 - (0.30 + 0.30 * bhd) * inb);',
       '  v_q = a_q;',
-      '  v_k = vec3(a_i2.x, spin, (1.0 - inb) * jw);',
-      '  v_v = normalize(world - u_cam);',
       '}'
     ].join('\n');
 
@@ -2069,26 +1844,22 @@
       'precision mediump float;',
       'varying vec2 v_q;',
       'varying float v_a;',
-      'varying vec3 v_k;',
-      'varying vec3 v_v;',
-      'uniform vec3 u_rtF;',
-      'uniform vec3 u_upF;',
-      'uniform vec3 u_fwd;',
-      LOOSE_GLSL,
+      'varying float v_tag;',
+      'uniform float u_tw;',    /* bounded nucleus twinkle phase */
       'void main() {',
       '  float r = length(v_q);',
-      '  if (v_k.x > 8.5) {',
+      '  if (v_tag > 8.5) {',
       /* HER OWN LUMINOUS NUCLEUS: the gastric core seen glowing through the
          apex of the glass, with a soft 4-point sparkle. (The Seraph circlet
          CROWN that used to be composited here is deleted — no headgear. This
          is the creature's own light, which is what "angel like" now means.) */
-      '    float w1 = 0.85 + 0.15 * sin(v_k.y);',
+      '    float w1 = 0.85 + 0.15 * sin(u_tw);',
       '    float core = exp(-r * r * 90.0) * 1.15;',
       '    float rays = exp(-abs(v_q.x) * 30.0) * exp(-abs(v_q.y) * 4.5)',
       '               + exp(-abs(v_q.y) * 30.0) * exp(-abs(v_q.x) * 4.5);',
       '    rays *= w1 * smoothstep(1.0, 0.2, r) * 0.32;',
       /* a small warm lantern inside the apex, not a crown ON it */
-      '    float lantern = exp(-pow(r / 0.30, 2.0)) * 0.15 * (0.86 + 0.14 * sin(v_k.y * 0.5));',
+      '    float lantern = exp(-pow(r / 0.30, 2.0)) * 0.15 * (0.86 + 0.14 * sin(u_tw * 0.5));',
       '    float halo = exp(-r * r * 6.0) * 0.10;',
       '    float an = (core + rays + lantern + halo) * v_a;',
       /* TONEMAP: a LUMINANCE-RATIO curve, not a per-channel knee. Every
@@ -2105,29 +1876,14 @@
       '    gl_FragColor = vec4(rad, 0.0);',   /* alpha 0 -> pure additive */
       '    return;',
       '  }',
+      /* PLAIN GOLD/WHITE STAR-DUST: a soft round core with a faint cross
+         flare. Light in water, so alpha 0 — it never occludes anything, which
+         is also what keeps this whole pass additive under the bell's
+         premultiplied blend. */
       '  float core = exp(-r * r * 9.0);',
       '  float cr = (exp(-abs(v_q.x) * 8.0) + exp(-abs(v_q.y) * 8.0)) * exp(-r * r * 2.2) * 0.30;',
-      '  if (v_k.x > 3.5) {',
-      /* plain gold dust — the foil the jewels are read against. Light in
-         water, so alpha 0: it never occludes anything. */
-      '    float ad = (core + cr) * v_a;',
-      '    gl_FragColor = vec4(vec3(0.95, 0.89, 0.75) * ad, 0.0);',
-      '    return;',
-      '  }',
-      /* A LOOSE STONE turning in the water. */
-      '  vec4 st = looseStone(v_q, v_k.x, v_k.y, u_rtF, u_upF, u_fwd, v_v);',
-      '  vec3 rad = st.rgb * st.a * v_a * 1.10;',
-      /* a whisper of the water it lights, so a jewel still reads as light */
-      '  rad += vec3(0.80, 0.84, 0.95) * core * v_a * 0.26;',
-      '  float L = max(rad.r, max(rad.g, rad.b));',
-      '  float Lt = L < 0.66 ? L : 0.66 + 0.34 * (1.0 - exp(-(L - 0.66) / 0.34));',
-      '  rad *= Lt / max(L, 1e-4);',
-      /* PREMULTIPLIED OVER: a cut stone in open water OCCLUDES what is behind
-         it, and that opacity is most of what makes it read as a solid object
-         instead of a glowing decal. v_k.z falls to 0 for a stone drifting
-         behind her glass, which sends that one back to pure additive. */
-      '  float al = clamp(st.a * 1.45 * v_a, 0.0, 1.0) * v_k.z;',
-      '  gl_FragColor = vec4(rad, al);',
+      '  float ad = (core + cr) * v_a;',
+      '  gl_FragColor = vec4(vec3(0.95, 0.89, 0.75) * ad, 0.0);',
       '}'
     ].join('\n');
 
@@ -2253,11 +2009,10 @@
         ['u_vp', 'u_pos', 'u_right', 'u_up', 'u_size', 'u_color', 'u_int']);
       progAura = makeProg(GLOW_VS, AURA_FS, { a_q: 0 },
         ['u_vp', 'u_pos', 'u_right', 'u_up', 'u_size', 'u_int', 'u_pulse', 'u_floor', 'u_dimD', 'u_ray']);
-      /* one program for the whole jewelled cloud AND her nucleus (instance 0) */
-      progMote = makeProg(MOTE_VS, MOTE_FS, { a_q: 0, a_i0: 2, a_i1: 3, a_i2: 5 },
-        ['u_vp', 'u_cam', 'u_right', 'u_up', 'u_hpos', 'u_time', 'u_hs', 'u_act',
-         'u_rip', 'u_ripA', 'u_dim', 'u_vpw', 'u_floor', 'u_tw',
-         'u_rtF', 'u_upF', 'u_fwd']);
+      /* one program for the whole dust cloud AND her nucleus (instance 0) */
+      progMote = makeProg(MOTE_VS, MOTE_FS, { a_q: 0, a_i0: 2, a_i1: 3, a_tag: 5 },
+        ['u_vp', 'u_right', 'u_up', 'u_hpos', 'u_time', 'u_hs', 'u_act',
+         'u_rip', 'u_ripA', 'u_dim', 'u_vpw', 'u_floor', 'u_tw']);
       if (!progBack || !progBell || !progRib || !progSil || !progShell || !progGlow || !progAura ||
           !progMote) { return false; }
 
@@ -2271,7 +2026,7 @@
       ribIBuf = staticBuf(gl.ELEMENT_ARRAY_BUFFER, ribIdx);
       silBuf = staticBuf(gl.ARRAY_BUFFER, silF);
       /* the cloud is static except instance 0 (her nucleus), which is rewritten
-         from the CPU each frame — 48 bytes, one bufferSubData, no allocation */
+         from the CPU each frame — 36 bytes, one bufferSubData, no allocation */
       moteBuf = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, moteBuf);
       gl.bufferData(gl.ARRAY_BUFFER, moteF, gl.DYNAMIC_DRAW);
@@ -2385,7 +2140,7 @@
     function setupHero() {
       var mobile = W <= 720;
       var pxPerWorld = H / (2 * tanY * (-HERO_Z));
-      /* RELIQUARY LAYOUT. The wings are gone, and with them the whole reason
+      /* HERO LAYOUT. The wings are gone, and with them the whole reason
          the old guard existed: it was solving for a 4.6-radius ribbon span and
          it paid for that span with HER SIZE (down to ~1.56 on a 1280 frame,
          from a pre-Seraph 1.72 cap). What has to fit now is just the bell —
@@ -2583,21 +2338,6 @@
       return x * x * (3 - 2 * x);
     }
 
-    /* Outer radius of the two pendant collets in strand-u units: cutStone
-       paints metal out to gr = 1.215, so these MUST track the radii passed at
-       RIB_FS (0.024 and 0.013) or the settings clip again. */
-    var COLLET_T = 1.215 * 0.024, COLLET_U = 1.215 * 0.013;
-
-    /* half-width, in u, that the strand must have at u for the collet centred
-       on uc (outer radius R) to be fully enclosed — the disc's own silhouette,
-       dilated by one node reach `sp` so a chord between samples still clears */
-    function colletNeed(u, uc, R, sp) {
-      var d = Math.abs(u - uc) - sp;
-      if (d <= 0) { return R; }
-      if (d >= R) { return 0; }
-      return R * Math.sqrt(1 - (d / R) * (d / R));
-    }
-
     /* camera-facing ribbon extrusion into the preallocated stream */
     function buildRibbons() {
       var o = 0, c, k;
@@ -2613,13 +2353,6 @@
            look machined at the rim. Hoisted out of the node loop, so this is
            one hash per chain per frame: the mean root mass is unchanged, but
            each strand emerges +/-25% thicker or finer than its neighbour. */
-        /* the chain's own length in world units: the set stones are sized in
-           u (fraction of the strand), so the shader needs the half-width in
-           the SAME units or a taper would squash them into ovals */
-        var chLenW = chSeg[c] * (len - 1);
-        /* how far one node reaches in u — the dilation the collet bulge needs
-           so the straight quad edge between two nodes still clears the disc */
-        var nodeSp = 0.62 / (len - 1);
         var rootJ = kind === 0
           ? 0.0855 * (0.75 + 0.50 * (0.5 + 0.5 * Math.sin(c * 17.31 + 4.7)))
           : 0;
@@ -2644,25 +2377,6 @@
                reading as a wiry hairline once the root mass tapers away */
             w = heroScale * (0.0075 + rootJ * Math.pow(1 - u, 7.0))
               * (1 + 0.09 * Math.sin(u * 24.0 + chSeed[c]));
-            /* A SETTING NEEDS SHOULDERS. The shader sets two stones into the
-               pendant strands and paints them out to the collet's outer edge,
-               1.215 * radius from centre — but the fragment can only exist
-               where the ribbon quad does, and the bare taper is thinner than
-               that on every one of the eight pendants (61%-91% of the collet
-               at the upper stone, 60%-84% at the lower). The metal was being
-               sliced off left and right and each setting read as two arcs.
-               The alpha `swell` in RIB_FS never fixed it: alpha cannot create
-               a fragment. So the TISSUE carries the setting — the strand
-               physically swells to hold each collet, which is what a real
-               pendant drop does anyway. The bulge is the collet's own disc
-               silhouette, dilated by ~0.62 of a node spacing so that the
-               piecewise-linear quad (nodes are coarser than the stones) still
-               encloses the circle between samples, plus an 8% margin. */
-            if ((c & 3) === 0) {
-              var need = Math.max(colletNeed(u, 0.132, COLLET_T, nodeSp),
-                                  colletNeed(u, 0.242, COLLET_U, nodeSp));
-              if (need > 0) { w = Math.max(w, need * chLenW * 1.08); }
-            }
             kv = c * 0.002;   /* per-chain bead phase, still < 0.5 (tentacle branch) */
             br = heroBright * farD * (0.80 + 0.36 * (0.5 + 0.5 * Math.sin(c * 5.7 + 1.3)));
           } else {
@@ -2672,19 +2386,18 @@
             br = heroBright * 1.30;
           }
           /* KEY LIGHT into this node's ribbon frame (across, along). The
-             fragment side rebuilds the third component, so a stone set on a
-             swinging arm is lit from the true direction and its glint travels
-             across the facets as the strand turns. */
+             fragment side rebuilds the third component, so a gold ferrule on a
+             swinging strand is lit from the true direction and its highlight
+             travels across the metal as the strand turns. */
           var dnl = 1 / (Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6);
           var litA = LKX * sx + LKY * sy + LKZ * sz;
           var litB = (LKX * dx + LKY * dy + LKZ * dz) * dnl;
-          var hwu = w / chLenW;
           ribF[o++] = x - sx * w; ribF[o++] = y - sy * w; ribF[o++] = z - sz * w;
           ribF[o++] = u; ribF[o++] = -vsg; ribF[o++] = br; ribF[o++] = kv;
-          ribF[o++] = litA; ribF[o++] = litB; ribF[o++] = hwu;
+          ribF[o++] = litA; ribF[o++] = litB;
           ribF[o++] = x + sx * w; ribF[o++] = y + sy * w; ribF[o++] = z + sz * w;
           ribF[o++] = u; ribF[o++] = vsg; ribF[o++] = br; ribF[o++] = kv;
-          ribF[o++] = litA; ribF[o++] = litB; ribF[o++] = hwu;
+          ribF[o++] = litA; ribF[o++] = litB;
         }
       }
     }
@@ -2846,12 +2559,12 @@
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
-    /* <=10 draw calls/frame (Reliquary budget <=14, and it DROPPED — the
-       Seraph build spent 11): backdrop, cursor glow (cond), silhouettes,
-       aura+aureole, ribbons, bell back wall, bell front wall, jewelled cloud
-       + nucleus (one instanced draw — the nucleus rides it as instance 0,
-       which is what retired the separate apex-star call), shells (cond),
-       flash (cond). Seven unconditional, three conditional. */
+    /* <=10 draw calls/frame (unchanged by the de-gem pass — removing the
+       stones removed shader work, not draws): backdrop, cursor glow (cond),
+       silhouettes, aura+aureole, ribbons, bell back wall, bell front wall,
+       rising dust + nucleus (one instanced draw — the nucleus rides it as
+       instance 0, which is what retired the separate apex-star call), shells
+       (cond), flash (cond). Seven unconditional, three conditional. */
     function draw() {
       gl.viewport(0, 0, canvas.width, canvas.height);
 
@@ -2927,13 +2640,13 @@
       gl.bindBuffer(gl.ARRAY_BUFFER, ribVBuf);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, ribF);
       gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 40, 0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 36, 0);
       setDiv(0, 0);
       gl.enableVertexAttribArray(1);
-      gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 40, 12);
+      gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 36, 12);
       setDiv(1, 0);
       gl.enableVertexAttribArray(4);
-      gl.vertexAttribPointer(4, 3, gl.FLOAT, false, 40, 28);
+      gl.vertexAttribPointer(4, 2, gl.FLOAT, false, 36, 28);
       setDiv(4, 0);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ribIBuf);
       gl.drawElements(gl.TRIANGLES, ribIdxCount, gl.UNSIGNED_SHORT, 0);
@@ -2971,23 +2684,15 @@
       gl.uniform1f(progBell.u_pass, 1);
       gl.drawElements(gl.TRIANGLES, bellIdxCount, gl.UNSIGNED_SHORT, 0);
 
-      /* THE JEWELLED CLOUD + HER NUCLEUS: one instanced draw, drawn AFTER the
-         bell and PREMULTIPLIED-OVER so a cut stone occludes the water (and the
-         glass) behind it instead of washing into it. Instance 0 is the nucleus
-         and emits alpha 0, compositing additively inside the same pass — which
-         is how this draw absorbed the old apex-star call. Stones that drift
-         behind her give their alpha up in the vertex stage and go additive. */
+      /* THE RISING DUST + HER NUCLEUS: one instanced draw, drawn AFTER the
+         bell. Every fragment emits alpha 0, so the layer is purely additive
+         even though the blend is still the bell's premultiplied one. Instance
+         0 is her nucleus, which is how this draw absorbed the old apex-star
+         call. */
       gl.useProgram(progMote.p);
       gl.uniformMatrix4fv(progMote.u_vp, false, mVP);
-      gl.uniform3f(progMote.u_cam, eyeX, eyeY, eyeZ);
       gl.uniform3f(progMote.u_right, rgt[0], rgt[1], rgt[2]);
       gl.uniform3f(progMote.u_up, upv[0], upv[1], upv[2]);
-      /* the fragment stage gets its OWN copies of the camera basis: sharing a
-         uniform name across stages forces both to one precision and can fail
-         the link on ES2 drivers ("Precisions of uniform u_right differ") */
-      gl.uniform3f(progMote.u_rtF, rgt[0], rgt[1], rgt[2]);
-      gl.uniform3f(progMote.u_upF, upv[0], upv[1], upv[2]);
-      gl.uniform3f(progMote.u_fwd, bck[0], bck[1], bck[2]);
       gl.uniform3f(progMote.u_hpos, heroPX, heroPY, HERO_Z);
       gl.uniform1f(progMote.u_time, timeS % MOTE_T);
       gl.uniform1f(progMote.u_hs, heroScale);
@@ -3010,13 +2715,13 @@
       bindQuad();
       gl.bindBuffer(gl.ARRAY_BUFFER, moteBuf);
       gl.enableVertexAttribArray(2);
-      gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 48, 0);
+      gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 36, 0);
       setDiv(2, 1);
       gl.enableVertexAttribArray(3);
-      gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 48, 16);
+      gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 36, 16);
       setDiv(3, 1);
       gl.enableVertexAttribArray(5);
-      gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 48, 32);
+      gl.vertexAttribPointer(5, 1, gl.FLOAT, false, 36, 32);
       setDiv(5, 1);
       drawArrInst(4, moteCount);
       setDiv(5, 0); gl.disableVertexAttribArray(5);
