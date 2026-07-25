@@ -81,3 +81,47 @@ Draw calls ≤14. All prior constraints unchanged: edits only inside createJelly
 GLSL ES 1.00, preallocation (wing chains extend the existing preallocated node arrays),
 context-restore covers new resources, dim band, mobile anchor, hidden-pause, DPR≤2,
 reduced-motion → 2D untouched, 110 tests green, SwiftShader + --disable-webgl verified.
+
+## Reliquary addendum (owner: "remove the wings and halo… angel LIKE, not an angel.
+## gold on the arms, gold strips on the body, diamonds/rubies/emeralds on and around her")
+
+She is no longer costumed as an angel. She becomes a PRECIOUS THING — gold-banded,
+jewel-set, radiant. Angelic in quality, not in props.
+
+### REMOVE (explicit angel iconography)
+- The kind-2 gold ribbon-WINGS entirely (chains, shader branch, and their share of the
+  ribbon buffers — reclaim the node budget).
+- The bladed circlet CROWN and the mandorla ring behind her.
+- Consequence to exploit: the wingtip guard in setupHero existed only to keep wings in
+  frame and cost her real scale. With wings gone, SIMPLIFY it and give her presence back
+  (target the pre-Seraph scale or better — she should feel monumental again).
+- KEEP the ambient divinity: converging shafts, the soft glow, the light column, and her
+  own nucleus. That is what "angel like" now means.
+
+### ADD
+- **Gold on the arms:** gold banding down the tentacles and oral arms — rings/ferrules at
+  intervals, brightest at the root, thinning toward the tips. The arms should look
+  adorned, not painted.
+- **Gold strips on the body:** deliberate gold bands across the bell — meridian strips
+  from apex toward the margin plus a banded rim — reading as goldsmithing laid ON the
+  glass, following the bell's curvature (they must deform with the contraction wave, not
+  slide over it).
+- **Gemstones, set:** faceted stones set into the gold — diamond (prismatic white),
+  ruby (deep red), emerald (green), sapphire (blue). On the bell along the strips and at
+  intervals along the arms. Each must read as a CUT STONE: hard facets, a bright
+  specular glint that moves with the view, colored depth — never a flat colored dot.
+- **Gemstones, free:** the star-motes become drifting jewels — the same single instanced
+  draw, now jewel-toned and faceted, twinkling as facets catch the light. Keep some
+  plain gold dust for contrast.
+
+### Discipline
+Her flesh stays violet/cyan moon-jelly; gold and gems are ADORNMENT on and around her.
+Gems must look precious, not like confetti or candy — restraint in count, richness in
+each stone. If the frame reads as a Christmas tree, the pass has failed.
+
+### Constraints
+Draw calls ≤14 (should DROP with wings removed — report the count). All prior constraints
+hold: edits only inside createJellyfield3D, GLSL ES 1.00, preallocation, context-restore
+covers new resources, dim band, mobile anchor, hidden-pause, DPR≤2, reduced-motion → 2D
+untouched, 110 tests green, SwiftShader + --disable-webgl verified, arms stay ATTACHED
+(the root/collar/hem fix from the Seraph pass is permanent).
