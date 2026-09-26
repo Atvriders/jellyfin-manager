@@ -1,9 +1,17 @@
-name: Build and Publish Docker Image
+name: Test and Publish Docker Image
 
 on:
   push:
-    branches:
-      - master
+    # Every branch runs the tests; only master publishes (see publish.if).
+    # Listing branches also keeps tag pushes out — a release already fires
+    # its own `release` event, and would otherwise build twice.
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Weekly rebuild so the published image picks up python:3.12-slim security
+    # fixes even in weeks when the app itself doesn't change.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
   release:
     types: [published]
 
@@ -11,20 +19,31 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# One run per ref at a time, and a running one is never cancelled, so a publish
+# is never killed halfway through pushing its tags. This sits on the workflow,
+# not the publish job, so a run takes its place in line when it is triggered,
+# not whenever its tests happen to finish. It is NOT what keeps `latest` from
+# going backwards: GitHub keeps only the newest pending run per group
+# (cancelling the one it replaces) and doesn't promise to start them in order.
+# The publish job's tip check does that.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build-and-push:
+  test:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
+          # The image's Python — tests must pass on what actually ships.
           python-version: "3.12"
 
       - name: Install test dependencies
@@ -36,28 +55,198 @@ jobs:
       - name: Run tests
         run: python3 -m pytest app/tests -q
 
+      # The frontend has no build step, so nothing else would catch a syntax
+      # error in a script before it breaks the page in the browser: the
+      # browser tests skip here (no playwright) and the smoke test only
+      # renders /login. That covers the templates' inline <script> blocks
+      # too, and the scan page's whole state machine is one of them.
+      # Finding no scripts at all fails too: that means they moved, not that
+      # they're fine, and a check that silently checks nothing is worse than none.
+      - name: Syntax-check JavaScript (static files and inline template scripts)
+        shell: bash
+        run: |
+          mapfile -t files < <(find app/static -type f -name '*.js' | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no .js files under app/static; update this check if they moved"
+            exit 1
+          fi
+
+          # Copy each inline block (any <script> without src=) out to its own
+          # file. Jinja tags are blanked ({{ }} becomes 0) and each block is
+          # padded to its template line, so node's errors point at the template.
+          python3 - "$RUNNER_TEMP/inline" <<'PY'
+          import glob, os, re, sys
+          out = sys.argv[1]
+          os.makedirs(out, exist_ok=True)
+          def blank(value):
+              return lambda m: value + "\n" * m.group(0).count("\n")
+          n = 0
+          for path in sorted(glob.glob("app/templates/*.html")):
+              text = open(path, encoding="utf-8").read()
+              blocks = re.finditer(r"<script\b(?![^>]*\bsrc\s*=)[^>]*>(.*?)</script>", text, re.S)
+              for i, m in enumerate(blocks):
+                  body = re.sub(r"\{\{.*?\}\}", blank("0"), m.group(1), flags=re.S)
+                  body = re.sub(r"\{%.*?%\}|\{#.*?#\}", blank(""), body, flags=re.S)
+                  pad = "\n" * text.count("\n", 0, m.start(1))
+                  name = f"{os.path.basename(path)}.{i}.js"
+                  with open(os.path.join(out, name), "w", encoding="utf-8") as f:
+                      f.write(pad + body)
+                  n += 1
+          if not n:
+              print("::error::no inline <script> blocks in app/templates; update this check if they moved")
+              sys.exit(1)
+          PY
+          mapfile -t -O "${#files[@]}" files < <(find "$RUNNER_TEMP/inline" -type f -name '*.js' | sort)
+
+          status=0
+          for f in "${files[@]}"; do
+            echo "node --check $f"
+            node --check "$f" || status=1
+          done
+          exit "$status"
+
+  publish:
+    needs: test
+    # Never for pull requests or feature branches: only master (push or manual
+    # run), the weekly rebuild (which runs on the default branch), and releases.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+      (github.event_name == 'release' && github.event.action == 'published')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
+      # Build the amd64 image into the local daemon first so it can be run.
+      # The multi-arch build below reuses this builder's layer cache, so the
+      # amd64 image it pushes is the one that was smoke-tested.
+      - name: Build amd64 image for the smoke test
+        uses: docker/build-push-action@v7
         with:
           context: ./app
+          platforms: linux/amd64
+          load: true
+          tags: jellyfin-manager:smoke
+
+      # The unit tests import app.py directly; this proves the IMAGE works:
+      # dependencies install, gunicorn boots the app, every template and static
+      # file in this commit made it past .dockerignore, and the Dockerfile's
+      # own HEALTHCHECK passes. JELLYFIN_URL points at a closed port: none of
+      # these routes may need Jellyfin to answer.
+      - name: Smoke-test the image
+        shell: bash
+        run: |
+          fail() { echo "::error::$1"; docker logs smoke || true; exit 1; }
+
+          # --health-interval only shortens the image's HEALTHCHECK interval;
+          # the probe command itself still comes from the Dockerfile.
+          docker run -d --name smoke -p 5455:5000 --health-interval 2s \
+            -e SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+            -e JELLYFIN_URL=http://127.0.0.1:9 \
+            -e JELLYFIN_API_KEY=x \
+            jellyfin-manager:smoke
+
+          # Deadlines, not attempt counts: each curl can itself take 2 s.
+          code=000
+          end=$((SECONDS + 30))
+          until [ "$code" = 200 ]; do
+            [ "$SECONDS" -lt "$end" ] || fail "/healthz never returned 200 within 30 s (last: $code)"
+            [ "$(docker inspect -f '{{.State.Running}}' smoke)" = true ] || fail "container exited during startup"
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:5455/healthz || true)
+            [ "$code" = 200 ] || sleep 1
+          done
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:5455/login || true)
+          [ "$code" = 200 ] || fail "GET /login returned $code"
+
+          # /login only renders url_for('static', ...) links, which works
+          # whether or not the files exist, so fetch every static file this
+          # commit has. index.html is only rendered after a sign-in, so look
+          # for the templates in the container directly.
+          mapfile -t statics < <(cd app/static && find . -type f | sed 's|^\./||' | sort)
+          [ "${#statics[@]}" -gt 0 ] || fail "no files under app/static in the checkout"
+          for f in "${statics[@]}"; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:5455/static/$f" || true)
+            [ "$code" = 200 ] || fail "GET /static/$f returned $code: missing from the image?"
+          done
+          for f in app/templates/*; do
+            docker exec smoke test -f "templates/${f#app/templates/}" || fail "templates/${f#app/templates/} is missing from the image"
+          done
+
+          health=starting
+          end=$((SECONDS + 20))
+          until [ "$health" = healthy ]; do
+            [ "$SECONDS" -lt "$end" ] || fail "Docker HEALTHCHECK is '$health', not healthy"
+            health=$(docker inspect -f '{{.State.Health.Status}}' smoke || true)
+            [ "$health" = healthy ] || sleep 1
+          done
+
+          echo "smoke test passed"
+          docker rm -f smoke
+
+      # `latest` and `master` must only ever move forward. Runs don't reliably
+      # start in push order (see concurrency above), and a scheduled, manual or
+      # re-run run can be building a commit master has since moved past. So
+      # they move only if this commit is still master's tip; otherwise this
+      # image goes out under its sha tag alone, and the newer commit's run
+      # (which can't start until this one is done) moves them.
+      - name: Check this commit is still the tip of master
+        id: tip
+        if: github.event_name != 'release'
+        shell: bash
+        run: |
+          # ls-remote patterns match on the tail, so pick the exact ref out.
+          tip=$(git ls-remote --exit-code origin refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }')
+          if [ "$tip" = "$GITHUB_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::master is now at $tip, so $GITHUB_SHA is pushed under its sha tag only"
+          fi
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # latest=auto (the default) would also tag every semver release
+          # `latest`, and a release cut from an older commit would drag it
+          # backwards. `latest` follows master's tip, below, and nothing else.
+          flavor: |
+            latest=false
+          tags: |
+            type=sha
+            type=ref,event=branch,enable=${{ steps.tip.outputs.current == 'true' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ steps.tip.outputs.current == 'true' }}
+
+      - name: Build and push (amd64 + arm64)
+        uses: docker/build-push-action@v7
+        with:
+          context: ./app
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

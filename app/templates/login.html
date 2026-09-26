@@ -27,6 +27,10 @@
 
     --rail-line: rgba(140, 180, 235, 0.22);
     --rail-tick: rgba(140, 180, 235, 0.38);
+
+    /* Small text that sits on bare water (outside the glass) gets an abyss
+       halo so it holds 4.5:1 even with the lit bell drifting behind it. */
+    --halo: 0 0 1px rgba(4, 10, 18, 1), 0 0 3px rgba(4, 10, 18, 0.9), 0 0 8px rgba(4, 10, 18, 0.75);
   }
 
   html { color-scheme: dark; }
@@ -114,6 +118,7 @@
     align-items: center;
     gap: 0.55rem;
     font-size: 0.62rem;
+    text-shadow: var(--halo);
   }
   .rail-mark::before {
     content: "";
@@ -150,7 +155,7 @@
     color: transparent;
   }
 
-  .brand-eyebrow { margin-top: 0.3rem; }
+  .brand-eyebrow { margin-top: 0.3rem; text-shadow: var(--halo); }
 
   /* ---- Glass card ---- */
 
@@ -367,26 +372,40 @@
       <noscript><div class="lockout-msg">JavaScript is off — refresh this page to check.</div></noscript>
     </div>
     <script>
-      let remaining = {{ locked_seconds }};
-      const timerEl = document.getElementById('timer');
+      (function () {
+        'use strict';
+        // Counted down from a deadline, not tick by tick: timers stall in
+        // background tabs and during sleep, the wall clock doesn't.
+        const deadline = Date.now() + {{ locked_seconds|int }} * 1000;
+        const timerEl = document.getElementById('timer');
+        let iv = null;
+        let reloading = false;
 
-      function pad(n) { return String(n).padStart(2, '0'); }
-      function fmt(s) {
-        const m = Math.floor(s / 60);
-        const sec = s % 60;
-        return pad(m) + ':' + pad(sec);
-      }
-
-      timerEl.textContent = fmt(remaining);
-      const iv = setInterval(() => {
-        remaining--;
-        if (remaining <= 0) {
-          clearInterval(iv);
-          location.reload();
-        } else {
-          timerEl.textContent = fmt(remaining);
+        function pad(n) { return String(n).padStart(2, '0'); }
+        function fmt(s) {
+          const m = Math.floor(s / 60);
+          const sec = s % 60;
+          return pad(m) + ':' + pad(sec);
         }
-      }, 1000);
+
+        function update() {
+          const left = Math.ceil((deadline - Date.now()) / 1000);
+          if (left <= 0) {
+            if (reloading) return;
+            reloading = true;
+            clearInterval(iv);
+            timerEl.textContent = '00:00';
+            location.reload();
+            return;
+          }
+          timerEl.textContent = fmt(left);
+        }
+
+        update();
+        iv = setInterval(update, 1000);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) update(); });
+        window.addEventListener('focus', update);
+      })();
     </script>
 
     {% else %}
@@ -394,12 +413,16 @@
     <form method="POST" action="/login">
       <div class="stack">
         <label class="sr-only" for="username">Jellyfin username</label>
-        <input type="text" id="username" name="username" placeholder="Jellyfin username" autofocus autocomplete="username" />
+        <input type="text" id="username" name="username" placeholder="Jellyfin username"
+               value="{{ username or '' }}"{% if not username %} autofocus{% endif %} autocomplete="username"
+               {% if error %}aria-invalid="true" aria-describedby="login-error"{% endif %} />
         <label class="sr-only" for="password">Password</label>
-        <input type="password" id="password" name="password" placeholder="Password" autocomplete="current-password" />
+        <input type="password" id="password" name="password" placeholder="Password"{% if username %} autofocus{% endif %}
+               autocomplete="current-password"
+               {% if error %}aria-invalid="true" aria-describedby="login-error"{% endif %} />
         <button type="submit">Enter</button>
         {% if error %}
-        <div class="error">{{ error }}</div>
+        <div class="error" id="login-error" role="alert">{{ error }}</div>
         <script>
           const card = document.querySelector('.card');
           card.classList.add('shake');

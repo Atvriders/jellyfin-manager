@@ -1,6 +1,7 @@
 /* Jellyfield — abyssal water column for "THE DEEP".
  * One file, three internal units:
- *   - Jellyfield2D: the shipped Canvas-2D engine, verbatim (only addition: detach()).
+ *   - Jellyfield2D: the shipped Canvas-2D engine, verbatim (additions: detach(),
+ *     context-restore rebuild, active-slice depth sort).
  *   - Jellyfield3D: WebGL water column — instanced shader jellyfish in real depth,
  *     fog, light shafts, camera parallax, ray flow field, 3D shockwave pulses.
  *   - selector: owns window.Jellyfield = { mount, pulse, setActivity }, picks the
@@ -17,7 +18,9 @@
   /* ===================================================================== 2D == */
   /* The shipped Canvas-2D engine, verbatim, minus its outer IIFE + window
    * assignment + duplicate window.Jellyfield guard (the outer IIFE guards).
-   * The ONLY code addition is detach() + the return of the API object. */
+   * Code additions: detach() + the return of the API object, plus two
+   * robustness fixes that restore the intended field — populate() sorts only
+   * the active slice, and a restored 2D context rebuilds its sprites. */
   function createJellyfield2D() {
   'use strict';
 
@@ -303,8 +306,16 @@
     for (i = 0; i < jellyCount; i++) {
       initJelly(jellies[i], i >= jellyCount - giants);
     }
-    /* depth sort once: far first, giants (nearest) last; depth never changes */
-    jellies.sort(function (a, b) { return a.depth - b.depth; });
+    /* depth sort once: far first, giants (nearest) last; depth never changes.
+       Sort ONLY the active slice: sorting the whole 60-slot pool pulled the
+       idle slots (depth 0 — placeholders parked at the top-left corner, or
+       stale leftovers from a previous density) into [0, jellyCount) and
+       pushed the deepest real jellies, the giants always among them, past
+       jellyCount where they are never drawn. On a phone the 34 idle slots
+       outnumber the 26 real ones, so NO real jelly was drawn at all. */
+    var active = jellies.slice(0, jellyCount);
+    active.sort(function (a, b) { return a.depth - b.depth; });
+    for (i = 0; i < jellyCount; i++) { jellies[i] = active[i]; }
   }
 
   /* ----------------------------------------------------------------- update */
@@ -612,6 +623,23 @@
     if (reduced) { renderStatic(); }
   }
 
+  /* 2D context loss (GPU reset, driver update, a backgrounded tab under
+     memory pressure). The spec restores a 2D context BY ITSELF unless
+     'contextlost' is cancelled — which is why that event is deliberately not
+     listened to — but it comes back blank with its state reset: identity
+     transform (quarter-scale on DPR>1) and, since draw() never clears and
+     leans on the opaque backdrop, 'lighter' strokes smearing forever. The
+     sprite and backdrop canvases are lost in the same reset, so rebuild all
+     of it in place. W/H are deliberately NOT zeroed: that re-runs populate()
+     and teleports the whole field; a null bgCanvas alone defeats
+     applyResize's unchanged-size early return and rescales positions by 1. */
+  function onContextRestored() {
+    if (!mounted || !ctx) { return; }
+    buildSprites();
+    bgCanvas = null;
+    applyResize();
+  }
+
   /* Debounced 150ms trailing: drag-resize and mobile URL-bar/soft-keyboard
      viewport changes fire resize per frame, and each applyResize reallocates
      two full-screen DPR-scaled canvases — run it once per settled size. */
@@ -658,9 +686,11 @@
     if (!canvasEl || typeof canvasEl.getContext !== 'function') { return; }
     if (mounted && canvasEl === canvas) { return; }
     if (mounted) { stop(); }
+    if (canvas && canvas !== canvasEl) { canvas.removeEventListener('contextrestored', onContextRestored); }
     canvas = canvasEl;
     ctx = canvas.getContext('2d');
     if (!ctx) { return; }
+    canvas.addEventListener('contextrestored', onContextRestored);
     if (!bellSprites[0]) { buildSprites(); }
 
     mql = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
@@ -727,8 +757,8 @@
     activityTarget = clamp(v, 0, 1);
   }
 
-  /* detach(): the ONLY addition to the shipped 2D engine — removes its
-     window/document listeners so the selector can swap renderers cleanly. */
+  /* detach(): removes the engine's window/document/canvas listeners so the
+     selector can swap renderers cleanly. */
   function detach() {
     stop();
     if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = 0; }
@@ -744,6 +774,7 @@
       else if (typeof mql.removeListener === 'function') { mql.removeListener(onMotionChange); }
       mql = null;
     }
+    if (canvas) { canvas.removeEventListener('contextrestored', onContextRestored); }
     mounted = false;
     canvas = null;
     ctx = null;
@@ -790,6 +821,8 @@
     var tanY = Math.tan(FOVY / 2), tanXA = tanY;
     var running = false, rafId = 0, lastT = 0, mounted = false, dead = false;
     var contextLost = false;
+    var lostTimer = 0;
+    var LOST_GRACE_MS = 3000;        /* visible time a lost context gets to restore */
     var timeS = 0;
 
     var activity = 0, activityTarget = 0;
@@ -2152,8 +2185,15 @@
         /* The console card spans the full width here and is opaque — anchor
            the bell in the measured open-water band ABOVE it (same idea as the
            desktop .column probe) so the hero is never buried behind the card. */
+        /* LAYOUT-relative, not scroll-relative: the canvas is fixed, so she is
+           sized against the card's resting place. getBoundingClientRect() alone
+           moves with the scroll, and a resize fired mid-scroll (the mobile URL
+           bar collapsing does exactly that) read a card top far above the fold
+           and shrank her to the band-floor size until the next resize. */
         var panel = document.querySelector('.panel');
-        var pTop = panel ? panel.getBoundingClientRect().top : H * 0.34;
+        var pTop = panel
+          ? panel.getBoundingClientRect().top + (window.pageYOffset || document.documentElement.scrollTop || 0)
+          : H * 0.34;
         var band = Math.max(H * 0.14, Math.min(H * 0.55, pTop));
         /* SWEPT extents, measured off the render (390x844, s=1, anchor parked):
            the apex sits 0.66 above the anchor and the lappet hem 0.68 below —
@@ -2835,23 +2875,59 @@
     }
 
     function onVisibility() {
-      if (document.hidden) { stop(); }
-      else { start(); }
+      if (document.hidden) { stop(); clearLostTimer(); }
+      else { start(); armLostTimer(); }
     }
 
     function fatal() {
       dead = true;
       stop();
+      clearLostTimer();
       if (typeof api.onFatal === 'function') { api.onFatal(); }
+    }
+
+    /* A lost context the browser never restores (Chrome blocks WebGL for the
+       page after repeated GPU resets; some mobile drivers simply never answer)
+       used to leave the water blank for the rest of the session: only
+       'webglcontextrestored' could restart the loop. So a loss arms a deadline,
+       and if no restore lands in time the engine declares itself dead and the
+       selector demotes to 2D on a fresh canvas. Only VISIBLE time counts:
+       browsers routinely drop a backgrounded tab's context and hand it back
+       once the tab is shown, so the clock is disarmed while hidden and re-armed
+       (full grace) when the page returns. */
+    function armLostTimer() {
+      if (lostTimer || !contextLost || dead || !mounted || document.hidden) { return; }
+      lostTimer = setTimeout(function () {
+        lostTimer = 0;
+        if (contextLost && !dead && mounted) { fatal(); }
+      }, LOST_GRACE_MS);
+    }
+
+    function clearLostTimer() {
+      if (lostTimer) { clearTimeout(lostTimer); lostTimer = 0; }
     }
 
     function onCtxLost(e) {
       e.preventDefault();
       contextLost = true;
       stop();
+      /* every program/buffer died with the context and a restore does NOT
+         revive them — it hands back a context that never saw them. Drop them
+         now so a restore that then fails (no instancing, a failed relink) and
+         demotes doesn't feed them to releaseGL(), where each delete on the
+         restored context logs "object does not belong to this context".
+         Nothing reads them while contextLost holds: the loop is stopped and
+         pulse() is gated; initGL() rebuilds the full set on restore. */
+      forgetGL();
+      armLostTimer();
     }
 
     function onCtxRestored() {
+      /* a restore landing after the deadline (or after detach) must not
+         resurrect this engine on a canvas the selector has already thrown
+         away — two render loops would then fight over the page */
+      if (dead || !mounted) { return; }
+      clearLostTimer();
       contextLost = false;
       if (!isGL2) {
         /* WebGL extension objects are invalidated by context loss: a stale
@@ -2888,13 +2964,16 @@
           gl = canvas.getContext('webgl', attrs) || canvas.getContext('experimental-webgl', attrs);
           if (gl) {
             instExt = gl.getExtension('ANGLE_instanced_arrays');
-            if (!instExt) { gl = null; canvas = null; return false; }
+            if (!instExt) { releaseGL(); canvas = null; return false; }
           }
         }
-        if (!gl || gl.isContextLost()) { gl = null; canvas = null; return false; }
-        if (!initGL()) { gl = null; canvas = null; return false; }
+        if (!gl || gl.isContextLost()) { releaseGL(); canvas = null; return false; }
+        /* release, not just forget: a half-built initGL() has already put
+           programs on this context — free them and the context now, rather
+           than whenever GC reaches the canvas the selector swaps out */
+        if (!initGL()) { releaseGL(); canvas = null; return false; }
       } catch (err) {
-        gl = null; canvas = null;
+        releaseGL(); canvas = null;
         return false;
       }
 
@@ -2992,9 +3071,53 @@
       activityTarget = v < 0 ? 0 : (v > 1 ? 1 : v);
     }
 
+    /* Free every GPU object and let go of the context. Nulling `gl` alone was
+       not enough: each program/buffer wrapper still pins its context, and the
+       context pins the canvas and its full-screen drawing buffer, so a demoted
+       engine kept the whole dead water column resident for the session — any
+       ONE leftover (the shell/glow/aura programs included) is enough to do it.
+       WEBGL_lose_context hands the GPU memory back now instead of at some
+       future GC. There are no textures, framebuffers or VAOs in this engine.
+       Called only after the canvas listeners are gone, so the loss this
+       triggers never reaches onCtxLost. Whatever it finds here belongs to the
+       CURRENT context: onCtxLost already forgot the pre-loss set, so after a
+       restore only objects initGL() made on the restored context remain. */
+    function releaseGL() {
+      var progs = [progBack, progBell, progRib, progSil, progShell, progGlow, progAura, progMote];
+      var bufs = [quadBuf, bellVBuf, bellIBuf, ribVBuf, ribIBuf, silBuf, shellBuf, moteBuf];
+      var i;
+      if (gl) {
+        try {
+          /* a context that is lost right now owns nothing it can free, and
+             is already off the GPU — there is nothing to delete or lose */
+          if (!gl.isContextLost()) {
+            gl.useProgram(null);
+            for (i = 0; i < progs.length; i++) { if (progs[i]) { gl.deleteProgram(progs[i].p); } }
+            for (i = 0; i < bufs.length; i++) { if (bufs[i]) { gl.deleteBuffer(bufs[i]); } }
+            var loseExt = gl.getExtension('WEBGL_lose_context');
+            if (loseExt) { loseExt.loseContext(); }
+          }
+        } catch (err) { /* best effort: dropping the references below is what matters */ }
+      }
+      forgetGL();
+      gl = null;
+      instExt = null;
+    }
+
+    /* Drop every program/buffer reference WITHOUT touching GL: used when the
+       objects are already dead (context loss) and by releaseGL() after it
+       has freed them. The context itself is kept — a restore reuses it. */
+    function forgetGL() {
+      progBack = null; progBell = null; progRib = null; progSil = null;
+      progShell = null; progGlow = null; progAura = null; progMote = null;
+      quadBuf = null; bellVBuf = null; bellIBuf = null;
+      ribVBuf = null; ribIBuf = null; silBuf = null; shellBuf = null; moteBuf = null;
+    }
+
     function detach() {
       stop();
       if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = 0; }
+      clearLostTimer();
       if (mounted) {
         window.removeEventListener('mousemove', onMouseMove);
         window.removeEventListener('mouseout', onMouseOut);
@@ -3006,9 +3129,8 @@
         }
       }
       mounted = false;
+      releaseGL();
       canvas = null;
-      gl = null;
-      instExt = null;
     }
 
     return api;

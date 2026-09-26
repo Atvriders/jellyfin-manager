@@ -2,21 +2,52 @@ services:
   jellyfin-manager:
     image: ghcr.io/atvriders/jellyfin-manager:latest
     ports:
+      # With TRUST_PROXY=1 (below) the app believes the X-Forwarded-For it is
+      # sent, so anything that can reach this port directly can pick its own
+      # IP: fake the one recorded in the history, pose as a LAN address to get
+      # past the remote-access check, and dodge the per-IP sign-in lockout by
+      # sending a new one with every guess. So make sure only the proxy can:
+      #   - proxy/tunnel in a container: put it on the same Docker network,
+      #     point it at http://jellyfin-manager:5000 and delete this mapping;
+      #   - proxy/tunnel running directly on this host (not in a container):
+      #     bind to loopback, "127.0.0.1:5455:5000";
+      #   - proxy on another machine, or a container that reaches this one
+      #     through the host's IP (e.g. cloudflared on Unraid): keep the
+      #     mapping and firewall port 5455 so only the proxy can connect.
+      #     Docker-published ports bypass ufw/INPUT rules; use the DOCKER-USER
+      #     chain.
       - "5455:5000"
     environment:
-      - JELLYFIN_URL=http://192.168.1.100:8096
+      - JELLYFIN_URL=http://192.0.2.10:8096
       - JELLYFIN_API_KEY=your_api_key_here
+      # Signs the login cookie. Generate one with:
+      #   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+      # The placeholder below is ignored: the app falls back to a random key,
+      # so logins won't survive a restart until you set a real one.
       - SECRET_KEY=change_this_to_a_random_string
       # Where the scan history is written. Must match the container side of the
       # volume below, otherwise history is lost on every update.
       - DATA_DIR=/data
       # Uncomment if you run this behind a reverse proxy (nginx, Traefik,
       # Cloudflare Tunnel, ...) so the history records the real client IP
-      # instead of the proxy's IP.
+      # instead of the proxy's IP. It is the number of proxies in a row, not
+      # an on/off switch: 1 for one proxy or tunnel, 2 when one forwards to
+      # another (see README). Read the note on `ports:` above first.
       # - TRUST_PROXY=1
+      # Marks the login cookie Secure: browsers never send it over plain http,
+      # so signing in at http://<host>:5455 would stop working.
+      # - SECURE_COOKIES=1   # only if every visit is over HTTPS
+      # Optional: show what qBittorrent is downloading and what's ready to scan in (see README)
+      # - QBITTORRENT_INSTANCES=Box 1=http://192.0.2.20:8080, Box 2=http://192.0.2.21:8080
     volumes:
       # REQUIRED: scan history lives here. Without this bind mount the history
       # is stored in the container's writable layer and is DESTROYED on every
       # `docker compose pull` / recreate.
       - ./data:/data
+    # A stop can take gunicorn's whole 10 s graceful timeout: an in-flight
+    # Jellyfin call can take that long to time out, and a keep-alive connection
+    # from a page that polled a moment ago holds it just as long (see the
+    # Dockerfile). Docker's default grace is also 10 s, so give it headroom
+    # before Docker falls back to SIGKILL.
+    stop_grace_period: 15s
     restart: unless-stopped

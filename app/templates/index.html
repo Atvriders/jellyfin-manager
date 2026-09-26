@@ -33,6 +33,10 @@
     /* Opaque enough (WCAG 1.4.3) that a bright bell drifting behind the glass
        can't pull small benthos text below 4.5:1. */
     --glass-bg: rgba(10, 24, 43, 0.85);
+
+    /* Small text that sits on bare water (outside the glass) gets an abyss
+       halo so it holds 4.5:1 even with the lit bell drifting behind it. */
+    --halo: 0 0 1px rgba(4, 10, 18, 1), 0 0 3px rgba(4, 10, 18, 0.9), 0 0 8px rgba(4, 10, 18, 0.75);
   }
 
   html { overflow-x: hidden; }
@@ -130,6 +134,7 @@
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--benthos);
+    text-shadow: var(--halo);
   }
   .tick-label::before {
     content: '';
@@ -143,10 +148,82 @@
 
   /* ---------- Brand block (surface) ---------- */
 
+  .surface {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.9rem 1.5rem;
+  }
+
   .brand {
     display: flex;
     align-items: center;
     gap: 0.9rem;
+  }
+
+  .brand-text .eyebrow { text-shadow: var(--halo); }
+
+  /* Who is signed in, and the way out. Quiet: it sits on bare water, so it
+     carries the same halo as the tick labels. */
+  .session {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    min-width: 0;
+    max-width: 100%;
+    font-size: 0.78rem;
+    color: var(--benthos);
+    text-shadow: var(--halo);
+  }
+
+  .session-who {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35em;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .session-user {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: #A9BEDC;   /* the same step-brighter-than-benthos as names in the dive log */
+    min-width: 0;
+    max-width: 18ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .session-sep { flex: none; color: rgba(140, 180, 235, 0.30); }
+
+  /* A quiet text button: benthos, a hairline underline on hover/focus. */
+  .text-btn {
+    flex: none;
+    font-family: var(--font-body);
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--benthos);
+    background: none;
+    border: none;
+    border-radius: 4px;
+    padding: 0.15rem 0.1rem;
+    cursor: pointer;
+    text-shadow: inherit;
+    text-decoration: none;     /* not a transparent underline: the halo would draw it */
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.28em;
+    transition: color 0.15s ease;
+  }
+  .text-btn:hover,
+  .text-btn:focus-visible {
+    color: var(--foam);
+    text-decoration-line: underline;
+    text-decoration-color: var(--benthos);
+  }
+  .text-btn:focus-visible {
+    outline: 2px solid var(--lumen);
+    outline-offset: 3px;
   }
 
   .brand-glyph {
@@ -229,9 +306,10 @@
       0 0 22px rgba(0, 164, 220, 0.38),
       0 0 60px -10px rgba(0, 164, 220, 0.45),
       inset 0 1px 0 rgba(255, 255, 255, 0.28);
-    transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+    transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease,
+                background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   }
-  #scan-btn:hover:not(:disabled) {
+  #scan-btn:hover:not([aria-disabled="true"]) {
     transform: translateY(-1px);
     filter: brightness(1.12);
     box-shadow:
@@ -239,9 +317,15 @@
       0 0 80px -8px rgba(0, 164, 220, 0.55),
       inset 0 1px 0 rgba(255, 255, 255, 0.32);
   }
-  #scan-btn:active:not(:disabled) { transform: translateY(0); filter: brightness(0.98); }
-  #scan-btn:disabled {
-    opacity: 0.38;
+  #scan-btn:active:not([aria-disabled="true"]) { transform: translateY(0); filter: brightness(0.98); }
+  /* aria-disabled, not the disabled property: a disabled button drops
+     keyboard focus to <body> the moment it is pressed. The dimmed look is the
+     old `opacity: 0.38` baked into the colours, so the focus ring on an
+     unavailable button stays at full strength. */
+  #scan-btn[aria-disabled="true"]:not([data-booting]) {
+    background: rgba(0, 164, 220, 0.38);
+    border-color: rgba(160, 225, 255, 0.21);
+    color: rgba(3, 32, 46, 0.92);
     cursor: not-allowed;
     box-shadow: none;
   }
@@ -249,6 +333,10 @@
     outline: 2px solid var(--lumen);
     outline-offset: 3px;
   }
+  /* Until the first /api/scan/state answer the button keeps its normal look
+     (no dim-then-bright flash on every load); a press made meanwhile waits
+     for that answer. */
+  #scan-btn[data-booting] { cursor: progress; }
 
   /* Sonar sweep (progress) */
 
@@ -326,6 +414,9 @@
     from { margin-left: 0%; }
     to   { margin-left: 60%; }
   }
+
+  /* Progress unknown (Jellyfin not answering): an empty track, no sweep. */
+  #status-bar-wrap.is-unavailable #status-bar-fill { visibility: hidden; }
 
   /* Cooldown readout */
 
@@ -425,13 +516,17 @@
 
   /* ---------- Dive log ---------- */
 
-  #history-count {
+  #history-count, #incoming-count {
     font-family: var(--font-mono);
     font-size: 0.72rem;
     color: var(--benthos);
     font-variant-numeric: tabular-nums;
     flex: none;
   }
+  /* "11 downloading · 2 ready" is wider than a 320 px panel has room for:
+     it wraps between its parts (non-breaking inside each) instead of
+     spilling past the border. */
+  #incoming-count { flex: 0 1 auto; min-width: 0; text-align: right; }
 
   #history-list {
     display: flex;
@@ -439,11 +534,15 @@
     font-family: var(--font-mono);
   }
 
+  /* when + outcome share the first line (the outcome drops under the time
+     only when a very narrow screen can't fit both); who/where/browser get a
+     row of their own at every width, so a 39-char IPv6 address can't squeeze
+     the name out. */
   .history-row {
     position: relative;
     display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr);
-    gap: 0.3rem 0.9rem;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.35rem 0.9rem;
     align-items: baseline;
     padding: 0.7rem 0 0.7rem 1rem;
     border-top: 1px solid var(--hairline-soft);
@@ -459,7 +558,23 @@
     background: rgba(140, 180, 235, 0.40);
   }
 
-  .history-when { min-width: 0; }
+  .history-head {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.3rem 0.9rem;
+    min-width: 0;
+  }
+
+  .history-when {
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.15rem 0.7rem;
+  }
 
   .history-time {
     display: block;
@@ -475,11 +590,25 @@
     font-family: var(--font-mono);
     font-size: 0.66rem;
     color: var(--benthos);
-    margin-top: 0.15rem;
+    white-space: nowrap;
+  }
+
+  .history-outcome {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-left: auto;
+  }
+
+  /* Repeated presses coalesced server-side into one row. */
+  .history-times {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--benthos);
+    cursor: help;
   }
 
   .badge {
-    justify-self: start;
     font-family: var(--font-body);
     font-size: 0.62rem;
     font-weight: 600;
@@ -494,14 +623,43 @@
   .badge.cooldown { color: var(--lantern); background: rgba(255, 192, 105, 0.13); border-color: rgba(255, 192, 105, 0.35); text-shadow: 0 0 8px rgba(255, 192, 105, 0.30); }
   .badge.error    { color: var(--coral);   background: rgba(255, 107, 122, 0.13); border-color: rgba(255, 107, 122, 0.35); text-shadow: 0 0 8px rgba(255, 107, 122, 0.30); }
   .badge.unknown  { color: var(--benthos); background: rgba(124, 147, 184, 0.13); border-color: rgba(124, 147, 184, 0.35); }
+  /* Pressed while a scan was already running: nothing went wrong, nothing
+     started. Benthos text on a faint lumen hairline, no glow. */
+  .badge.busy     { color: var(--benthos); background: rgba(76, 242, 199, 0.05);  border-color: rgba(76, 242, 199, 0.28); }
 
   .history-meta {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
+    grid-column: 1 / -1;
+    min-width: 0;
+    overflow: hidden;          /* clips the separator that leads each wrapped line */
     font-size: 0.72rem;
     color: var(--benthos);
+  }
+
+  /* user · ip · browser. Items wrap instead of overlapping; every item draws
+     its own leading "·", and the negative margin tucks the one that starts a
+     line under .history-meta's clip, so no line ever begins with a dot. */
+  .history-meta-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    row-gap: 0.15rem;
+    margin-left: -1.1rem;
+  }
+  :where(.history-meta-line) > span {
+    position: relative;
+    flex: 0 1 auto;
     min-width: 0;
+    max-width: 100%;
+    padding-left: 1.1rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  :where(.history-meta-line) > span::before {
+    content: '·';
+    position: absolute;
+    left: 0.4rem;
+    color: rgba(140, 180, 235, 0.30);
   }
 
   .history-user {
@@ -512,7 +670,7 @@
        ellipsize like .history-ua, capped so ip · browser always keep room. */
     flex: 0 1 auto;
     min-width: 0;
-    max-width: 18ch;
+    max-width: calc(18ch + 1.1rem);
     overflow: hidden;
     text-overflow: ellipsis;
     cursor: help;
@@ -521,38 +679,175 @@
   .history-ip {
     font-family: var(--font-mono);
     color: var(--benthos);
-    white-space: nowrap;
-    flex: none;
   }
 
-  .history-sep { color: rgba(140, 180, 235, 0.30); flex: none; }
-
+  /* The browser label gives way first: it may shrink to a few characters
+     (full text in its title) before it drops to a line of its own. */
   .history-ua {
     font-family: var(--font-mono);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
+    flex: 1 1 calc(9ch + 1.1rem);
+    max-width: max-content;
     cursor: help;
   }
 
-  .history-err {
+  .history-err, .history-note {
     grid-column: 1 / -1;
     font-family: var(--font-mono);
     font-size: 0.7rem;
     color: var(--coral);
     overflow-wrap: anywhere;
   }
+  /* A note on a row that didn't fail ("probably started"): information, not
+     an alarm. */
+  .history-note { color: var(--benthos); }
 
-  #history-empty, #history-error {
+  #history-empty, #history-error, #history-unsaved {
     display: none;
     font-size: 0.8rem;
     color: var(--benthos);
     text-align: center;
     padding: 0.6rem 0;
   }
-  #history-empty.show, #history-error.show { display: block; }
-  #history-error { color: var(--coral); opacity: 0.85; }
+  #history-empty.show, #history-error.show, #history-unsaved.show { display: block; }
+  #history-error, #history-unsaved { color: var(--coral); opacity: 0.85; }
+
+  #history-more {
+    display: block;
+    margin: 0.5rem auto 0;
+  }
+
+  /* Focus lands here when the last "Show older" page hides its button. */
+  #history-title:focus { outline: none; }
+  #history-title:focus-visible { outline: 2px solid var(--lumen); outline-offset: 3px; border-radius: 4px; }
+
+  /* ---------- Incoming (qBittorrent) ---------- */
+
+  /* A class that sets display must never beat the hidden attribute. */
+  [hidden] { display: none !important; }
+
+  .incoming-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .incoming-list {
+    display: flex;
+    flex-direction: column;
+    font-family: var(--font-mono);
+  }
+
+  .dl-row, .ready-row {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.7rem 0 0.7rem 1rem;
+    border-top: 1px solid var(--hairline-soft);
+  }
+  .dl-row:first-child, .ready-row:first-child { border-top: none; }
+  .dl-row::before, .ready-row::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 1.28rem;
+    width: 0.55rem;
+    height: 1px;
+    background: rgba(140, 180, 235, 0.40);
+  }
+  /* Lantern tick: finished, waiting for a scan. */
+  .ready-row::before { background: rgba(255, 192, 105, 0.75); }
+
+  .dl-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    min-width: 0;
+  }
+
+  .dl-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 0.8rem;
+    color: var(--foam);
+    cursor: help;
+  }
+
+  .src-tag {
+    flex: none;
+    max-width: 12ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-body);
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--benthos);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    padding: 0.14rem 0.5rem;
+  }
+
+  .dl-track {
+    height: 2px;
+    border-radius: 1px;
+    background: rgba(140, 180, 235, 0.18);
+    overflow: hidden;
+  }
+  .dl-fill {
+    height: 100%;
+    background: linear-gradient(90deg, rgba(76, 242, 199, 0.35), var(--lumen));
+    transition: width 0.6s ease;
+  }
+
+  .dl-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2rem 0.6rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--benthos);
+  }
+  .dl-state { color: var(--lantern); }
+
+  /* Paused: the bar and the name step back. Not row-wide opacity: that took
+     the tag and percent (small benthos text) to 2.64:1. */
+  .is-paused .dl-name { color: var(--benthos); }
+  .is-paused .dl-track { opacity: 0.55; }
+  .is-paused .dl-fill { background: var(--benthos); }
+  .is-bad .dl-fill { background: var(--coral); }
+  .is-bad .dl-state { color: var(--coral); }
+  .ready-row.is-adding .dl-meta { color: var(--lumen); }
+
+  .incoming-sources {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .incoming-empty, .incoming-more, .src-problem {
+    font-size: 0.78rem;
+    color: var(--benthos);
+  }
+  .incoming-more { padding-left: 1rem; }
+  .incoming-empty { padding: 0.35rem 0; }
+  .incoming-empty.warn, .src-problem { color: var(--coral); opacity: 0.9; }
+  .src-problem { font-family: var(--font-mono); font-size: 0.74rem; }
+
+  #incoming-nudge {
+    font-size: 0.84rem;
+    line-height: 1.45;
+    color: var(--lantern);
+    text-align: center;
+    text-wrap: balance;
+  }
 
   /* ---------- Responsive ---------- */
 
@@ -570,8 +865,8 @@
   }
 
   @media (max-width: 560px) {
-    .history-row { grid-template-columns: minmax(0, 1fr) auto; }
-    .history-meta { grid-column: 1 / -1; }
+    /* Phones: the relative time goes under the clock, as before. */
+    .history-when { flex-direction: column; gap: 0.15rem; }
   }
 
   @media (max-width: 400px) {
@@ -586,8 +881,10 @@
     #cat-emoji { animation: none; }
     #status-bar-fill.indeterminate { animation: none; margin-left: 30%; }
     #scan-btn { transition: none; }
-    #scan-btn:hover:not(:disabled) { transform: none; }
+    #scan-btn:hover:not([aria-disabled="true"]) { transform: none; }
     #status-bar-fill { transition: none; }
+    .dl-fill { transition: none; }
+    .text-btn { transition: none; }
   }
 </style>
 </head>
@@ -602,23 +899,32 @@
   <!-- SURFACE -->
   <header class="station">
     <div class="tick-label">Surface</div>
-    <div class="brand">
-      <svg class="brand-glyph" width="40" height="46" viewBox="0 0 40 46" fill="none" aria-hidden="true">
-        <defs>
-          <linearGradient id="jgrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="#A65CC7" />
-            <stop offset="1" stop-color="#00A4DC" />
-          </linearGradient>
-        </defs>
-        <path d="M6 20.5C6 11.4 12.3 5 20 5s14 6.4 14 15.5c-4.5 2.7-9.3 4-14 4s-9.5-1.3-14-4z" stroke="url(#jgrad)" stroke-width="1.6" stroke-linejoin="round" />
-        <path d="M12 26c-.7 4-2 6.6-1.3 11.5" stroke="url(#jgrad)" stroke-width="1.4" stroke-linecap="round" />
-        <path d="M19.6 27c.4 4.6-1.2 8.2.4 13.5" stroke="url(#jgrad)" stroke-width="1.4" stroke-linecap="round" />
-        <path d="M27.5 26c.9 3.7 2.2 6.5 1.1 11.5" stroke="url(#jgrad)" stroke-width="1.4" stroke-linecap="round" />
-      </svg>
-      <div class="brand-text">
-        <h1 class="wordmark">Jellyfin Manager</h1>
-        <div class="eyebrow">Library sonar</div>
+    <div class="surface">
+      <div class="brand">
+        <svg class="brand-glyph" width="40" height="46" viewBox="0 0 40 46" fill="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="jgrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#A65CC7" />
+              <stop offset="1" stop-color="#00A4DC" />
+            </linearGradient>
+          </defs>
+          <path d="M6 20.5C6 11.4 12.3 5 20 5s14 6.4 14 15.5c-4.5 2.7-9.3 4-14 4s-9.5-1.3-14-4z" stroke="url(#jgrad)" stroke-width="1.6" stroke-linejoin="round" />
+          <path d="M12 26c-.7 4-2 6.6-1.3 11.5" stroke="url(#jgrad)" stroke-width="1.4" stroke-linecap="round" />
+          <path d="M19.6 27c.4 4.6-1.2 8.2.4 13.5" stroke="url(#jgrad)" stroke-width="1.4" stroke-linecap="round" />
+          <path d="M27.5 26c.9 3.7 2.2 6.5 1.1 11.5" stroke="url(#jgrad)" stroke-width="1.4" stroke-linecap="round" />
+        </svg>
+        <div class="brand-text">
+          <h1 class="wordmark">Jellyfin Manager</h1>
+          <div class="eyebrow">Library sonar</div>
+        </div>
       </div>
+      <!-- POST-only: a cross-site GET can't sign anyone out. The name is
+           autoescaped by Jinja (never marked safe). -->
+      <form class="session" method="post" action="/logout">
+        <span class="session-who">Signed in{% if user %} as <span class="session-user" title="{{ user }}">{{ user }}</span>{% endif %}</span>
+        <span class="session-sep" aria-hidden="true">·</span>
+        <button type="submit" class="text-btn">Sign out</button>
+      </form>
     </div>
   </header>
 
@@ -633,7 +939,15 @@
         </div>
       </div>
 
-      <button id="scan-btn">Scan media library</button>
+      <!-- Starts aria-disabled (but not dimmed: data-booting) until the first
+           /api/scan/state answer, so it is never pressable during a cooldown
+           it doesn't know about yet. aria-disabled (not disabled) keeps
+           keyboard focus on it. -->
+      <button id="scan-btn" type="button" aria-disabled="true" data-booting aria-describedby="status-msg scan-when">Scan media library</button>
+      {% if incoming_enabled %}
+      <div id="incoming-nudge" hidden></div>
+      <div id="incoming-announce" class="sr-only" role="status" aria-live="polite"></div>
+      {% endif %}
 
       <div id="status-bar-wrap">
         <div class="status-bar-head">
@@ -646,11 +960,12 @@
         </div>
       </div>
 
-      <!-- Repaints every 500ms — hidden from screen readers; cooldown state is
-           announced once via #sr-announce instead. -->
+      <!-- Repaints every 500ms — hidden from screen readers; the cooldown is
+           announced once via #sr-announce and described (per minute) by
+           #scan-when, which the button references. -->
       <div id="timer-wrap" aria-hidden="true">
         <div id="timer-label">Next scan available in</div>
-        <div id="timer">60:00</div>
+        <div id="timer"></div>
       </div>
 
       <div id="spinning-cat" aria-hidden="true">
@@ -665,8 +980,41 @@
 
       <div id="status-msg" role="status" aria-live="polite"></div>
       <div id="sr-announce" class="sr-only" role="status" aria-live="polite"></div>
+      <div id="scan-when" class="sr-only"></div>
     </div>
   </section>
+
+  {% if incoming_enabled %}
+  <!-- INCOMING -->
+  <section class="station" id="incoming" aria-labelledby="incoming-title">
+    <div class="tick-label">Incoming</div>
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <div class="eyebrow">qBittorrent</div>
+          <h2 id="incoming-title">Incoming</h2>
+        </div>
+        <span id="incoming-count"></span>
+      </div>
+      <div id="incoming-loading" class="incoming-empty">Checking qBittorrent…</div>
+      <div id="incoming-sources" class="incoming-sources" hidden></div>
+      <div class="incoming-group">
+        <div class="eyebrow">Downloading</div>
+        <div id="incoming-downloading" class="incoming-list"></div>
+        <div id="incoming-more" class="incoming-more" hidden></div>
+        <div id="incoming-downloading-empty" class="incoming-empty" hidden>Nothing downloading right now.</div>
+        <div id="incoming-downloading-unknown" class="incoming-empty warn" hidden>Can’t reach qBittorrent right now.</div>
+      </div>
+      <div class="incoming-group">
+        <div class="eyebrow">Ready to add</div>
+        <div id="incoming-ready" class="incoming-list"></div>
+        <div id="incoming-ready-empty" class="incoming-empty" hidden>Nothing waiting for a scan.</div>
+        <div id="incoming-ready-unknown" class="incoming-empty warn" hidden>Can’t check Jellyfin right now.</div>
+      </div>
+      <div id="incoming-error" class="incoming-empty warn" hidden>Couldn’t load downloads.</div>
+    </div>
+  </section>
+  {% endif %}
 
   <!-- DIVE LOG -->
   <section class="station">
@@ -675,48 +1023,74 @@
       <div class="panel-head">
         <div class="panel-title">
           <div class="eyebrow">History</div>
-          <h2>Dive log</h2>
+          <h2 id="history-title" tabindex="-1">Dive log</h2>
         </div>
         <span id="history-count"></span>
       </div>
       <div>
+        <div id="history-unsaved">History isn’t being saved — check the /data volume.</div>
         <div id="history-list"></div>
         <div id="history-empty">No scans recorded yet.</div>
         <div id="history-error">Couldn’t load scan history.</div>
+        <button id="history-more" type="button" class="text-btn" hidden>Show older</button>
       </div>
     </div>
   </section>
 </main>
 
 <script src="{{ url_for('static', filename='jellyfield.js') }}"></script>
+{% if incoming_enabled %}
+<!-- Before the inline script: it listens for the scan:* events that script dispatches. -->
+<script src="{{ url_for('static', filename='incoming.js') }}"></script>
+{% endif %}
 <script>
-  const btn             = document.getElementById('scan-btn');
-  const timerWrap       = document.getElementById('timer-wrap');
-  const timerEl         = document.getElementById('timer');
-  const statusBarWrap   = document.getElementById('status-bar-wrap');
-  const statusBarTrack  = document.getElementById('status-bar-track');
-  const statusBarFill   = document.getElementById('status-bar-fill');
-  const statusBarLabel  = document.getElementById('status-bar-label');
-  const statusBarPct    = document.getElementById('status-bar-pct');
-  const spinningCat     = document.getElementById('spinning-cat');
-  const statusMsg       = document.getElementById('status-msg');
-  const srAnnounce      = document.getElementById('sr-announce');
+(function () {
+  'use strict';
 
-  let tickInterval = null;
-  let pollInterval = null;
-  let doneHideTimeout = null;
-  let cooldownActive = false;
+  const $ = (id) => document.getElementById(id);
+  const btn             = $('scan-btn');
+  const timerWrap       = $('timer-wrap');
+  const timerEl         = $('timer');
+  const statusBarWrap   = $('status-bar-wrap');
+  const statusBarTrack  = $('status-bar-track');
+  const statusBarFill   = $('status-bar-fill');
+  const statusBarLabel  = $('status-bar-label');
+  const statusBarPct    = $('status-bar-pct');
+  const spinningCat     = $('spinning-cat');
+  const statusMsg       = $('status-msg');
+  const srAnnounce      = $('sr-announce');
+  const scanWhen        = $('scan-when');
+
+  const COOLDOWN_MS        = 60 * 60 * 1000;
+  const REQUEST_TIMEOUT_MS = 8000;    // status reads (the server answers from disk or a 5 s Jellyfin call)
+  const PRESS_TIMEOUT_MS   = 20000;   // POST /api/scan: a task check plus a refresh with a 10 s upstream timeout
+  const STATE_EVERY_MS     = 30000;   // cooldown + scan-running re-sync while visible
+  const HISTORY_EVERY_MS   = 60000;   // dive log (and its relative times) while visible
+  const PROGRESS_FAST_MS   = 2000;    // while a scan is being tracked
+  const PROGRESS_MAX_MS    = 60000;   // backoff ceiling when progress is unavailable
+  const EXPECT_MS          = 15000;   // after our own press, time for Jellyfin to report Running
+  const COMPLETE_SHOW_MS   = 3000;
+  const LOST_HOLD_MS       = 5 * 60 * 1000;  // a running scan whose progress went quiet stays guarded this long
+  const FAILS_TO_UNKNOWN   = 2;       // consecutive failed progress reads before the page says it can't tell
+  const ANNOUNCE_CLEAR_MS  = 5000;    // #sr-announce says a thing once, then empties
+  const HISTORY_PAGE       = 50;
+
+  const RUNNING_MSG = 'A library scan is running.';
+  const LOST_MSG    = 'A library scan may still be running.';
+  const LAPSED_MSG  = 'A new scan may restart one still running.';
 
   /* ---------------- Jellyfield hooks ----------------
      The engine is injected separately; every call is optional-chained
      so a missing engine never throws. */
 
-  window.Jellyfield?.mount(document.getElementById('jellyfield'));
+  window.Jellyfield?.mount($('jellyfield'));
 
   document.addEventListener('click', (e) => {
     if (e.target && e.target.closest && e.target.closest('#scan-btn')) return; // the button fires its own sonar bloom
     window.Jellyfield?.pulse(e.clientX, e.clientY, 1);
   });
+
+  /* ---------------- Small helpers ---------------- */
 
   function pad(n) { return String(n).padStart(2, '0'); }
 
@@ -728,109 +1102,473 @@
     return `${pad(m)}:${pad(s)}`;
   }
 
-  function setProgressBar(pct, label) {
-    statusBarWrap.style.display = 'flex';
-    statusBarFill.classList.remove('indeterminate');
-    statusBarFill.style.width = pct + '%';
-    statusBarLabel.textContent = label || 'Scanning…';
-    statusBarPct.textContent = pct > 0 ? pct.toFixed(1) + '%' : '';
-    statusBarTrack.setAttribute('aria-valuenow', String(Math.round(pct)));
-    statusBarTrack.removeAttribute('aria-valuetext');
+  function aboutMinutes(ms) {
+    if (ms < 60000) return 'less than a minute';
+    const m = Math.ceil(ms / 60000);
+    return 'about ' + m + (m === 1 ? ' minute' : ' minutes');
   }
 
-  function startProgressPoll() {
-    if (pollInterval) clearInterval(pollInterval);
-    statusBarWrap.style.display = 'flex';
-    statusBarFill.classList.add('indeterminate');
-    statusBarLabel.textContent = 'Scanning…';
-    statusBarPct.textContent = '';
-    statusBarTrack.removeAttribute('aria-valuenow');           // indeterminate phase
-    statusBarTrack.setAttribute('aria-valuetext', 'Scanning');
-
-    pollInterval = setInterval(async () => {
-      try {
-        const r = await fetch('/api/scan/progress');
-        const d = await r.json();
-        if (d.state === 'running') {
-          statusBarFill.classList.remove('indeterminate');
-          setProgressBar(d.percent, d.name || 'Scanning…');
-        } else if (d.state === 'idle') {
-          setProgressBar(100, 'Scan complete');
-          statusBarPct.textContent = '100%';
-          clearInterval(pollInterval);
-          setTimeout(() => { statusBarWrap.style.display = 'none'; }, 3000);
-        }
-      } catch (_) {}
-    }, 2000);
+  // Only touch the DOM when the text really changes: rewriting a live region
+  // with the same words makes some screen readers say it again.
+  function setText(node, text) {
+    const value = text == null ? '' : String(text);
+    if (node.textContent !== value) node.textContent = value;
   }
 
-  function startCooldown(remainingMs) {
-    const until = Date.now() + remainingMs;
-    cooldownActive = true;
-    btn.disabled = true;
-    if (doneHideTimeout) { clearTimeout(doneHideTimeout); doneHideTimeout = null; }
-    timerWrap.style.display = 'flex';
-    spinningCat.style.display = 'flex';
-    timerEl.classList.remove('done');
-    // One polite announcement per cooldown; the visual 500ms countdown itself
-    // is aria-hidden so it can't spam screen readers.
-    srAnnounce.textContent = 'Scan cooldown active. Next scan available in about '
-      + Math.max(1, Math.ceil(remainingMs / 60000)) + ' minutes.';
-    startProgressPoll();
-
-    if (tickInterval) clearInterval(tickInterval);
-
-    tickInterval = setInterval(() => {
-      const left = until - Date.now();
-      if (left <= 0) {
-        clearInterval(tickInterval);
-        clearInterval(pollInterval);
-        // Let the lantern countdown turn lumen at 00:00 for a beat before it
-        // disappears — hiding it in the same tick meant the .done state never
-        // painted a single frame.
-        timerEl.textContent = '00:00';
-        timerEl.classList.add('done');
-        if (doneHideTimeout) clearTimeout(doneHideTimeout);
-        doneHideTimeout = setTimeout(() => { timerWrap.style.display = 'none'; }, 1200);
-        spinningCat.style.display = 'none';
-        statusBarWrap.style.display = 'none';
-        btn.disabled = false;
-        statusMsg.textContent = 'Ready to scan.';
-        statusMsg.className = '';
-        cooldownActive = false;
-        window.Jellyfield?.setActivity(0);
-      } else {
-        timerEl.textContent = formatMs(left);
-      }
-    }, 500);
+  // Every message sets its class too, so an old error's red never sticks to
+  // the next message.
+  function setMsg(text, kind) {
+    statusMsg.className = kind || '';
+    setText(statusMsg, text);
   }
 
-  // Sync state from server on load
-  async function syncState() {
+  /* ---------------- One fetch helper for every call on this page ----------------
+     401 -> the login page. A body that isn't JSON (a proxy / tunnel error
+     page) -> a friendly message, never a JSON parse error. Every request gets
+     its own timeout. Resolves {status, ok, data} for any JSON answer. */
+
+  let signedOut = false;
+
+  function unreachable(status) {
+    return "Couldn't reach Jellyfin Manager" + (status ? ' (HTTP ' + status + ')' : '') + '. Try again shortly.';
+  }
+
+  function signedOutError() {
+    const err = new Error('Signed out');
+    err.signedOut = true;
+    return err;
+  }
+
+  function goToLogin() {
+    if (signedOut) return;
+    signedOut = true;
+    loops.forEach((loop) => loop.stop());
+    window.location.assign('/login');
+  }
+
+  async function api(url, options, timeoutMs) {
+    if (signedOut) throw signedOutError();
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs || REQUEST_TIMEOUT_MS);
     try {
-      const r = await fetch('/api/scan/state');
-      const d = await r.json();
-      if (d.active && d.remaining_ms > 0) {
-        timerEl.textContent = formatMs(d.remaining_ms);
-        startCooldown(d.remaining_ms);
-        window.Jellyfield?.setActivity(0.25); // resumed cooldown: faint shimmer, no bloom
+      let r;
+      try {
+        r = await fetch(url, Object.assign(
+          { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' } },
+          options,
+          { signal: ctrl.signal }));
+      } catch (_) {
+        throw new Error(unreachable(0));        // offline, DNS, reset, or our timeout
       }
-    } catch (_) {}
+      if (r.status === 401) { goToLogin(); throw signedOutError(); }
+      let data = null;
+      try { data = await r.json(); } catch (_) { data = null; }
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(unreachable(r.status));
+      return { status: r.status, ok: r.ok, data };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  syncState();
+  /* ---------------- Chained loops ----------------
+     The next run is scheduled only after the previous one settles (no pile-up
+     when Jellyfin is slow). stop() and restart() bump a generation token, so
+     a response that lands after either is dropped instead of repainting
+     stale state. */
+
+  const loops = [];
+
+  function makeLoop(task) {
+    const L = { gen: 0, timer: null, busy: false, again: false, againMs: 0 };
+    function schedule(ms) {
+      clearTimeout(L.timer);
+      L.timer = setTimeout(run, Math.max(0, ms || 0));
+    }
+    async function run() {
+      L.timer = null;
+      if (signedOut || document.hidden) return;         // visibilitychange resumes it
+      if (L.busy) { L.again = true; return; }
+      L.busy = true;
+      const gen = L.gen;
+      let next = null;
+      try {
+        next = await task(() => gen === L.gen && !signedOut);
+      } catch (_) {
+        next = null;
+      }
+      L.busy = false;
+      if (L.again) { L.again = false; schedule(L.againMs); return; }
+      if (gen === L.gen && typeof next === 'number') schedule(next);
+    }
+    const loop = {
+      kick(ms) {
+        if (L.busy) { L.again = true; L.againMs = ms || 0; return; }
+        schedule(ms);
+      },
+      kickIfIdle() { if (!L.busy && !L.timer) schedule(0); },
+      stop() { L.gen++; clearTimeout(L.timer); L.timer = null; L.again = false; },
+      // Something just changed what the answer should be (a press settled):
+      // an answer to a request already sent describes the world before it, so
+      // drop it and ask again (after it settles: still one request at a time).
+      restart(ms) {
+        L.gen++;
+        clearTimeout(L.timer);
+        L.timer = null;
+        if (L.busy) { L.again = true; L.againMs = ms || 0; } else schedule(ms);
+      },
+    };
+    loops.push(loop);
+    return loop;
+  }
+
+  /* ---------------- Scan console state ---------------- */
+
+  const S = {
+    synced: false,       // first /api/scan/state answer (or failure) seen
+    pressing: false,     // POST /api/scan in flight
+    cooldownUntil: 0,    // epoch ms, 0 = no cooldown
+    scan: 'unknown',     // Jellyfin's library task: unknown | idle | running | error
+    percent: null,
+    name: '',
+    tracking: false,     // following a scan: ours, a 409, or one seen running
+    sawRunning: false,   // this page saw the task Running (gates "Scan complete")
+    expectUntil: 0,      // after our press: grace for Jellyfin to flip to Running
+    completeUntil: 0,    // show "Scan complete" until
+    ended: null,         // a watched scan stopped without completing: {text, kind}, for render to say
+    lastRun: null,       // Jellyfin's last result as of the previous idle answer (runKey); null: none seen
+    pressRun: null,      // lastRun when our press started a scan (null: unknown)
+    underWay: null,      // what the Incoming panel was last told (scan:activity)
+    failures: 0,         // consecutive progress failures (backoff)
+    lostSince: 0,        // progress of a scan seen running stopped answering at (epoch ms)
+    reason: null,        // last availability reason (see render)
+    surgeUntil: 0,       // press bloom: leave the water alone until then
+    activity: null,
+    pressWaiting: false, // pressed before the first state answer
+  };
+
+  let tickTimer = null;
+  let doneHideTimer = null;
+  let lostTimer = null;
+  let announceTimer = null;
+
+  function cooldownLeft() {
+    return S.cooldownUntil ? S.cooldownUntil - Date.now() : 0;
+  }
+
+  // Said once, then emptied: left in place, "about 41 minutes" would still be
+  // there half an hour later. #scan-when (the button's description, not a
+  // live region) carries the current value from then on.
+  function announce(text) {
+    clearTimeout(announceTimer);
+    announceTimer = null;
+    setText(srAnnounce, text);
+    if (text) announceTimer = setTimeout(() => { announceTimer = null; setText(srAnnounce, ''); }, ANNOUNCE_CLEAR_MS);
+  }
+
+  // lead: what the announcement starts with. '' when the status line already
+  // says there is a cooldown (a 429), so it isn't read out twice.
+  function setCooldown(until, lead) {
+    const starting = !S.cooldownUntil;
+    S.cooldownUntil = until;
+    // Starts or re-syncs: the Incoming panel's nudge counts down to this.
+    document.dispatchEvent(new CustomEvent('scan:cooldown', { detail: { until } }));
+    if (starting) {
+      if (doneHideTimer) { clearTimeout(doneHideTimer); doneHideTimer = null; }
+      timerEl.classList.remove('done');
+      timerWrap.style.display = 'flex';
+      spinningCat.style.display = 'flex';
+      // One polite announcement per cooldown; the visual 500ms countdown is
+      // aria-hidden so it can't spam screen readers.
+      announce((lead == null ? 'Scan cooldown active. ' : lead)
+        + 'Next scan available in ' + aboutMinutes(until - Date.now()) + '.');
+    }
+    if (!tickTimer) tickTimer = setInterval(tick, 500);
+    tick();   // paint the real value now: no stale "00:00" / "60:00" frame
+  }
+
+  function endCooldown() {
+    if (!S.cooldownUntil) return;
+    S.cooldownUntil = 0;
+    clearInterval(tickTimer);
+    tickTimer = null;
+    document.dispatchEvent(new CustomEvent('scan:cooldown', { detail: { until: 0 } }));
+    // Let the lantern countdown turn lumen at 00:00 for a beat before it
+    // disappears.
+    setText(timerEl, '00:00');
+    timerEl.classList.add('done');
+    if (doneHideTimer) clearTimeout(doneHideTimer);
+    doneHideTimer = setTimeout(() => { timerWrap.style.display = 'none'; doneHideTimer = null; }, 1200);
+    spinningCat.style.display = 'none';
+    announce('');
+    setText(scanWhen, '');
+    render();
+  }
+
+  function tick() {
+    const left = cooldownLeft();
+    if (left <= 0) { endCooldown(); return; }
+    setText(timerEl, formatMs(left));
+    setText(scanWhen, 'Next scan available in ' + aboutMinutes(left) + '.');
+    render();
+  }
+
+  function applyState(d) {
+    const ms = Number(d.remaining_ms);
+    if (d.active === true && Number.isFinite(ms) && ms > 0) {
+      const until = Date.now() + ms;
+      if (!S.cooldownUntil || Math.abs(until - S.cooldownUntil) > 1500) setCooldown(until);
+    } else if (S.cooldownUntil) {
+      endCooldown();
+    }
+  }
+
+  // Tells one run's result from another's. '' when Jellyfin gave no times to
+  // tell them apart by.
+  function runKey(last) {
+    if (!last || (last.started_at == null && last.ended_at == null)) return '';
+    return [last.status, last.started_at, last.ended_at].map(String).join('|');
+  }
+
+  // How a watched scan ended, in Jellyfin's words. null: "Scan complete", as
+  // before (Completed, or Jellyfin didn't say). Nothing else is "complete".
+  function endedAs(last) {
+    const status = last && typeof last.status === 'string' ? last.status : '';
+    if (!status || status === 'Completed') return null;
+    if (status === 'Cancelled') return { text: 'Scan cancelled.', kind: '' };
+    return { text: 'Scan ended: ' + status + '.', kind: 'error' };    // Failed, Aborted
+  }
+
+  function applyProgress(d) {
+    const now = Date.now();
+    S.lostSince = 0;
+    if (d.state === 'running') {
+      const p = Number(d.percent);
+      S.scan = 'running';
+      S.percent = Number.isFinite(p) ? Math.min(100, Math.max(0, p)) : null;
+      S.name = typeof d.name === 'string' ? d.name : '';
+      S.tracking = true;
+      S.sawRunning = true;
+      S.expectUntil = 0;
+      S.completeUntil = 0;
+      return;
+    }
+    S.scan = 'idle';
+    // Jellyfin marks the task Idle a moment before it records how the run
+    // ended: the result an idle answer from before the run already carried
+    // is an earlier run's, and says nothing about this one.
+    const last = d.last && typeof d.last === 'object' ? d.last : null;
+    const key = runKey(last);
+    const fresh = key === '' || key !== S.lastRun;
+    S.lastRun = key;
+    // Our press's run started and ended between two polls (a small library
+    // scans in a second or two), so Running was never seen. A result that
+    // changed since the press is that run's.
+    const ranUnseen = !S.sawRunning && S.expectUntil > now && S.pressRun !== null
+      && key !== '' && key !== S.pressRun;
+    if (S.sawRunning || ranUnseen) {
+      // Only a scan this page watched (or just started) says how it ended.
+      S.sawRunning = false;
+      S.tracking = false;
+      S.expectUntil = 0;
+      S.ended = fresh ? endedAs(last) : null;
+      if (!S.ended) {
+        S.completeUntil = now + COMPLETE_SHOW_MS;
+        setTimeout(render, COMPLETE_SHOW_MS + 50);
+      }
+    } else if (!(S.expectUntil > now)) {
+      S.tracking = false;
+    }
+  }
+
+  // Why the button is (un)available. Changes of reason drive the status line;
+  // a press owns the line for its own outcome.
+  function reasonKey(now) {
+    if (!S.synced) return 'sync';
+    if (S.pressing) return 'pressing';
+    if (S.scan === 'running' || (S.tracking && S.expectUntil > now)) return 'running';
+    // A scan this page saw running has gone quiet. Not knowing is not "idle":
+    // a press would restart it from 0 %. Guarded for a while, not forever, so
+    // a Jellyfin that never answers again can't lock the button.
+    if (S.scan === 'error' && S.sawRunning && S.lostSince && now - S.lostSince < LOST_HOLD_MS) return 'lost';
+    if (S.cooldownUntil > now) return 'cooldown';
+    if (S.tracking && S.scan === 'error') return 'unknown';
+    return 'ready';
+  }
+
+  function onReasonChange(prev, next, now) {
+    if (prev === 'pressing' || next === 'pressing') return;
+    if (prev === null || prev === 'sync') {            // first answer after load: quiet unless a scan runs
+      if (next === 'running') setMsg(RUNNING_MSG);
+      else if (next === 'lost') setMsg(LOST_MSG);
+      return;
+    }
+    if (next === 'running') setMsg(RUNNING_MSG);
+    else if (next === 'lost') setMsg(LOST_MSG);
+    else if (S.ended) return;                         // render() says how the scan ended
+    else if (next === 'ready') setMsg('Ready to scan.');
+    else if (next === 'unknown') setMsg(LAPSED_MSG);
+    else if (next === 'cooldown') {
+      const watched = prev === 'running' || prev === 'lost';
+      if (watched && S.completeUntil > now) setMsg('Scan complete.');
+      else if (prev !== 'running') setMsg('');          // someone else's press: the timer explains
+    }
+  }
+
+  function showBar(pct, label) {
+    statusBarWrap.style.display = 'flex';
+    statusBarWrap.classList.remove('is-unavailable');
+    setText(statusBarLabel, label);
+    if (pct === null) {
+      statusBarFill.classList.add('indeterminate');
+      statusBarFill.style.width = '';
+      setText(statusBarPct, '');
+      statusBarTrack.removeAttribute('aria-valuenow');
+      statusBarTrack.setAttribute('aria-valuetext', label);
+    } else {
+      statusBarFill.classList.remove('indeterminate');
+      statusBarFill.style.width = pct + '%';
+      setText(statusBarPct, pct >= 100 ? '100%' : pct > 0 ? pct.toFixed(1) + '%' : '');
+      statusBarTrack.setAttribute('aria-valuenow', String(Math.round(pct)));
+      statusBarTrack.removeAttribute('aria-valuetext');
+    }
+  }
+
+  function showUnavailable() {
+    statusBarWrap.style.display = 'flex';
+    statusBarWrap.classList.add('is-unavailable');
+    statusBarFill.classList.remove('indeterminate');
+    statusBarFill.style.width = '0%';
+    setText(statusBarLabel, 'Scan progress unavailable');
+    setText(statusBarPct, '');
+    statusBarTrack.removeAttribute('aria-valuenow');
+    statusBarTrack.setAttribute('aria-valuetext', 'Scan progress unavailable');
+  }
+
+  function hideBar() {
+    statusBarWrap.style.display = 'none';
+    statusBarWrap.classList.remove('is-unavailable');
+  }
+
+  function render() {
+    const now = Date.now();
+    const key = reasonKey(now);
+    if (key !== S.reason) {
+      const prev = S.reason;
+      S.reason = key;
+      onReasonChange(prev, key, now);
+    }
+    // How a watched scan ended holds the line until the reason changes again.
+    // A press in flight owns the line for its own outcome.
+    if (S.ended) {
+      if (key !== 'pressing') setMsg(S.ended.text, S.ended.kind);
+      S.ended = null;
+    }
+    // The Incoming panel's own answer can be 25 s old; its "adding now" follows
+    // what this console sees (it looks every 2 s while it follows a scan).
+    if (key !== 'sync' && key !== 'pressing') {
+      const underWay = key === 'running' || key === 'lost';
+      if (underWay !== S.underWay) {
+        S.underWay = underWay;
+        document.dispatchEvent(new CustomEvent('scan:activity', { detail: { running: underWay } }));
+      }
+    }
+    const blocked = key === 'sync' || key === 'pressing' || key === 'running' || key === 'lost' || key === 'cooldown';
+    const want = blocked ? 'true' : 'false';
+    if (btn.getAttribute('aria-disabled') !== want) btn.setAttribute('aria-disabled', want);
+    if (S.synced && btn.hasAttribute('data-booting')) btn.removeAttribute('data-booting');
+
+    if (S.scan === 'running') showBar(S.percent, S.name || 'Scanning…');
+    else if (S.completeUntil > now) showBar(100, 'Scan complete');
+    else if (S.tracking && S.scan === 'error') showUnavailable();
+    else if (S.tracking && S.expectUntil > now) showBar(null, 'Starting scan…');
+    else hideBar();
+
+    // The water: a faint shimmer while a scan or cooldown is under way.
+    const level = (S.cooldownUntil > now || S.scan === 'running') ? 0.25 : 0;
+    if (now >= S.surgeUntil && level !== S.activity) {
+      S.activity = level;
+      window.Jellyfield?.setActivity(level);
+    }
+  }
+
+  /* ---------------- Status loops ---------------- */
+
+  const stateLoop = makeLoop(async (current) => {
+    try {
+      const res = await api('/api/scan/state');
+      if (!current()) return null;
+      if (res.ok) applyState(res.data);
+    } catch (e) {
+      if (e.signedOut || !current()) return null;
+    }
+    S.synced = true;           // even on failure: never leave the button stuck
+    render();
+    if (S.pressWaiting) {      // pressed before we knew: go ahead only if it's allowed
+      S.pressWaiting = false;
+      if (btn.getAttribute('aria-disabled') === 'false') btn.click();
+    }
+    progressLoop.kickIfIdle();
+    return STATE_EVERY_MS;
+  });
+
+  const progressLoop = makeLoop(async (current) => {
+    let res = null;
+    try {
+      res = await api('/api/scan/progress');
+    } catch (e) {
+      if (e.signedOut) return null;
+    }
+    if (!current()) return null;
+    const d = res && res.ok ? res.data : null;
+    if (d && (d.state === 'running' || d.state === 'idle')) {
+      S.failures = 0;
+      applyProgress(d);
+    } else {
+      // 502 / timeout / tunnel page: say so, don't sweep "Scanning…" forever.
+      // But one miss between good answers is not an outage (Jellyfin is often
+      // slow while it scans): the last known state holds until reads keep
+      // failing, or the status line would flip back and forth, read out each
+      // time.
+      S.failures++;
+      if (S.failures >= FAILS_TO_UNKNOWN) S.scan = 'error';
+      if (S.sawRunning && !S.lostSince) {
+        S.lostSince = Date.now();                    // the guard counts from the first miss
+        clearTimeout(lostTimer);                     // the guard lapses on time, polls or not
+        lostTimer = setTimeout(render, LOST_HOLD_MS + 50);
+      }
+    }
+    render();
+    if (S.failures) return Math.min(PROGRESS_MAX_MS, PROGRESS_FAST_MS * 2 ** (S.failures - 1));
+    if (S.scan === 'running' || S.tracking) return PROGRESS_FAST_MS;
+    return null;               // idle: the state loop looks again in 30 s
+  });
 
   /* ---------------- Dive log ----------------
      SECURITY: every value below (user, ip, user_agent, error) is
      attacker-influenced (user is a Jellyfin account name). Rows are built
      with createElement + textContent ONLY. Never innerHTML. */
 
-  const historyList  = document.getElementById('history-list');
-  const historyEmpty = document.getElementById('history-empty');
-  const historyError = document.getElementById('history-error');
-  const historyCount = document.getElementById('history-count');
+  const historyList  = $('history-list');
+  const historyEmpty = $('history-empty');
+  const historyError = $('history-error');
+  const historyCount = $('history-count');
+  const historyMore  = $('history-more');
+  const historyUnsaved = $('history-unsaved');
 
-  const OUTCOMES = { started: 'started', cooldown: 'cooldown', error: 'error' };
+  const OUTCOMES = { started: 'started', cooldown: 'cooldown', error: 'error', busy: 'busy' };
+
+  let shownKeys = new Set();
+  let shownRows = 0;
+  let shownPresses = 0;
+  let totalRows = 0;
+  let historyChain = Promise.resolve();
+
+  // Refreshes and "Show older" never interleave.
+  function historyLocked(fn) {
+    const p = historyChain.then(fn, fn);
+    historyChain = p.catch(() => {});
+    return p;
+  }
 
   function formatWhen(ts) {
     const d = new Date(ts * 1000);
@@ -845,7 +1583,6 @@
     const d = new Date(ts * 1000);
     if (isNaN(d.getTime())) return '';
     const sec = Math.round((Date.now() - d.getTime()) / 1000);
-    if (sec < 0)    return 'just now';
     if (sec < 45)   return 'just now';
     const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's') + ' ago';
     const min = Math.round(sec / 60);
@@ -907,114 +1644,263 @@
     return node;
   }
 
+  function pressesIn(entry) {
+    const n = Math.floor(Number(entry.count));
+    return Number.isFinite(n) && n > 1 ? n : 1;
+  }
+
+  function rowKey(entry) {
+    return entry.id ? 'id:' + String(entry.id)
+      : [entry.ts, entry.outcome, entry.ip, entry.user].map(String).join('|');
+  }
+
   function buildRow(entry) {
     const outcome = OUTCOMES[entry.outcome] || null;
     const row = el('div', 'history-row');
-
-    // Timestamp column sits nearest the rail: the rail is the timeline.
-    const when = el('div', 'history-when');
     const ts = typeof entry.ts === 'number' ? entry.ts : Number(entry.ts);
+    row.dataset.ts = String(ts);
+
+    // Timestamp sits nearest the rail: the rail is the timeline.
+    const head = el('div', 'history-head');
+    const when = el('div', 'history-when');
     when.appendChild(el('span', 'history-time', formatWhen(ts)));
-    const rel = relativeTime(ts);
-    if (rel) when.appendChild(el('span', 'history-rel', rel));
-    row.appendChild(when);
+    when.appendChild(el('span', 'history-rel', relativeTime(ts)));
+    head.appendChild(when);
 
-    const badge = el('span', 'badge ' + (outcome || 'unknown'), outcome || 'unknown');
-    row.appendChild(badge);
+    const out = el('div', 'history-outcome');
+    out.appendChild(el('span', 'badge ' + (outcome || 'unknown'), outcome || 'unknown'));
+    const n = pressesIn(entry);
+    if (n > 1) {
+      // Repeated presses the server folded into one row.
+      const times = el('span', 'history-times');
+      times.appendChild(el('span', null, '×' + n)).setAttribute('aria-hidden', 'true');
+      times.appendChild(el('span', 'sr-only', n + ' presses'));
+      const last = Number(entry.last_ts);
+      times.title = n + ' presses' + (Number.isFinite(last) && last > 0 ? ', the last at ' + formatWhen(last) : '');
+      out.appendChild(times);
+    }
+    head.appendChild(out);
+    row.appendChild(head);
 
-    const meta = el('div', 'history-meta');
     // Meta order: user · ip · browser. Old rows have no "user" — omit the
-    // span and its separator entirely so they render exactly as before.
+    // span entirely so they render exactly as before.
+    const meta = el('div', 'history-meta');
+    const line = el('div', 'history-meta-line');
     if (entry.user) {
       const userEl = el('span', 'history-user', String(entry.user));
       userEl.title = String(entry.user);   // property assignment, not markup
-      meta.appendChild(userEl);
-      meta.appendChild(el('span', 'history-sep', '·'));
+      line.appendChild(userEl);
     }
     const ip = entry.ip ? String(entry.ip) : 'unknown IP';
-    meta.appendChild(el('span', 'history-ip', ip));
-    meta.appendChild(el('span', 'history-sep', '·'));
+    const ipEl = el('span', 'history-ip', ip);
+    ipEl.title = ip;
+    line.appendChild(ipEl);
 
     const ua = entry.user_agent ? String(entry.user_agent) : '';
     const uaEl = el('span', 'history-ua', shortUA(ua));
     uaEl.title = ua || 'No User-Agent sent';   // property assignment, not markup
-    meta.appendChild(uaEl);
+    line.appendChild(uaEl);
+    meta.appendChild(line);
     row.appendChild(meta);
 
+    // Server-supplied text, shown exactly as sent: an error row's reason in
+    // coral; on any other row it is a note ("probably started"), in benthos.
     if (entry.error) {
-      row.appendChild(el('div', 'history-err', String(entry.error)));
+      row.appendChild(el('div', outcome === 'error' ? 'history-err' : 'history-note', String(entry.error)));
     }
     return row;
   }
 
-  function renderHistory(entries) {
-    clear(historyList);
-    historyError.classList.remove('show');
+  function renderHistoryHead() {
+    if (!shownRows) historyCount.textContent = '';
+    else if (totalRows > shownRows) historyCount.textContent = 'Latest ' + shownRows + ' of ' + totalRows;
+    else historyCount.textContent = shownPresses === 1 ? '1 press' : shownPresses + ' presses';
+    const more = totalRows > shownRows;
+    // The last "Show older" hides itself: don't drop keyboard focus to <body>.
+    if (!more && document.activeElement === historyMore) $('history-title').focus();
+    historyMore.hidden = !more;
+  }
 
-    if (!entries.length) {
-      historyEmpty.classList.add('show');
-      historyCount.textContent = '';
-      return;
+  function renderHistory(d, append) {
+    const entries = Array.isArray(d.entries) ? d.entries : [];
+    if (!append) {
+      clear(historyList);
+      shownKeys = new Set();
+      shownRows = 0;
+      shownPresses = 0;
     }
-    historyEmpty.classList.remove('show');
-    historyCount.textContent = entries.length === 1
-      ? '1 press'
-      : entries.length + ' presses';
-
     const frag = document.createDocumentFragment();
     for (const entry of entries) {
-      if (entry && typeof entry === 'object') frag.appendChild(buildRow(entry));
+      if (!entry || typeof entry !== 'object') continue;
+      const key = rowKey(entry);
+      if (shownKeys.has(key)) continue;       // a newer press shifted the page by one
+      shownKeys.add(key);
+      frag.appendChild(buildRow(entry));
+      shownRows++;
+      shownPresses += pressesIn(entry);
     }
     historyList.appendChild(frag);
+    const total = Number(d.total);
+    totalRows = Number.isFinite(total) && total > shownRows ? total : shownRows;
+    historyError.classList.remove('show');
+    historyEmpty.classList.toggle('show', shownRows === 0);
+    renderHistoryHead();
   }
 
-  async function refreshHistory() {
-    try {
-      const r = await fetch('/api/history?limit=50');
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const d = await r.json();
-      renderHistory(Array.isArray(d.entries) ? d.entries : []);
-    } catch (_) {
-      // Quiet failure: leave whatever is already rendered, just flag it.
-      historyEmpty.classList.remove('show');
-      historyError.classList.add('show');
+  function refreshRelativeTimes() {
+    for (const row of historyList.children) {
+      const rel = row.querySelector('.history-rel');
+      if (rel) setText(rel, relativeTime(Number(row.dataset.ts)));
     }
   }
 
-  refreshHistory();
+  // "writable": whether the server can save presses at all. The 503 carries it
+  // too: a broken /data usually breaks reads as well. Anything else: no news.
+  function renderUnsaved(d) {
+    if (d.writable === false) historyUnsaved.classList.add('show');
+    else if (d.writable === true) historyUnsaved.classList.remove('show');
+  }
+
+  function historyFailed() {
+    // Quiet failure: leave whatever is already rendered, just flag it.
+    historyEmpty.classList.remove('show');
+    historyError.classList.add('show');
+    refreshRelativeTimes();
+  }
+
+  const historyLoop = makeLoop((current) => historyLocked(async () => {
+    if (!current()) return null;
+    // Re-read everything on screen, including pages opened with "Show older".
+    const limit = Math.max(HISTORY_PAGE, shownRows);
+    let res;
+    try {
+      res = await api('/api/history?limit=' + limit + '&offset=0');
+    } catch (e) {
+      if (e.signedOut || !current()) return null;
+      historyFailed();
+      return HISTORY_EVERY_MS;
+    }
+    if (!current()) return null;
+    renderUnsaved(res.data);
+    if (res.ok) renderHistory(res.data, false);
+    else historyFailed();
+    return HISTORY_EVERY_MS;
+  }));
+
+  historyMore.addEventListener('click', () => historyLocked(async () => {
+    if (historyMore.hidden) return;
+    historyMore.setAttribute('aria-busy', 'true');
+    setText(historyMore, 'Loading…');
+    try {
+      const res = await api('/api/history?limit=' + HISTORY_PAGE + '&offset=' + shownRows);
+      renderUnsaved(res.data);
+      if (res.ok) renderHistory(res.data, true);
+      else historyFailed();
+    } catch (e) {
+      if (!e.signedOut) historyFailed();
+    } finally {
+      historyMore.removeAttribute('aria-busy');
+      setText(historyMore, 'Show older');
+    }
+  }));
+
+  /* ---------------- The button ---------------- */
 
   btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    statusMsg.textContent = '';
+    // aria-disabled keeps focus on the button, so the guard lives here.
+    if (!S.synced) { S.pressWaiting = true; return; }
+    if (btn.getAttribute('aria-disabled') === 'true') return;
+    S.pressing = true;
+    setMsg('', '');
+    render();
 
     // Sonar bloom from the button center; field surges then settles.
     const rect = btn.getBoundingClientRect();
     window.Jellyfield?.pulse(rect.left + rect.width / 2, rect.top + rect.height / 2, 2.4);
+    S.surgeUntil = Date.now() + 4000;
+    S.activity = 1;
     window.Jellyfield?.setActivity(1);
-    setTimeout(() => {
-      window.Jellyfield?.setActivity(cooldownActive ? 0.25 : 0);
-    }, 4000);
+    setTimeout(render, 4050);
 
+    let res = null;
+    let failure = '';
     try {
-      const r = await fetch('/api/scan', { method: 'POST' });
-      const d = await r.json();
-      if (r.status === 429) {
-        startCooldown(d.remaining_ms);
-        return;
-      }
-      if (d.error) throw new Error(d.error);
-
-      statusMsg.textContent = 'Scan started.';
-      startCooldown(60 * 60 * 1000);
+      res = await api('/api/scan', { method: 'POST' }, PRESS_TIMEOUT_MS);
     } catch (e) {
-      statusMsg.textContent = 'Error: ' + e.message;
-      statusMsg.className = 'error';
-      btn.disabled = false;
-    } finally {
-      // Every press is recorded server-side: started, cooldown AND error.
-      refreshHistory();
+      if (e.signedOut) return;
+      failure = e.message;
     }
+    S.pressing = false;
+    const d = res ? res.data : {};
+    const serverSays = typeof d.error === 'string' && d.error ? d.error : '';
+
+    if (failure) {
+      setMsg(failure, 'error');
+    } else if (res.status === 200 && d.status === 'started') {
+      setMsg('Scan started.', '');
+      S.tracking = true;
+      S.sawRunning = false;
+      S.lostSince = 0;
+      S.failures = 0;
+      S.completeUntil = 0;
+      S.expectUntil = Date.now() + EXPECT_MS;
+      S.pressRun = S.lastRun;
+      setCooldown(Date.now() + COOLDOWN_MS);
+      document.dispatchEvent(new CustomEvent('scan:started'));
+      progressLoop.restart(1000);
+    } else if (res.status === 429) {
+      setMsg(serverSays || 'Scan cooldown active', '');
+      const ms = Number(d.remaining_ms);
+      if (Number.isFinite(ms) && ms > 0) setCooldown(Date.now() + ms, '');   // the line above says it
+    } else if (res.status === 409) {
+      // Someone (or Jellyfin's own schedule) is already scanning: follow it.
+      setMsg(serverSays || 'A library scan is already running.', '');
+      S.scan = 'running';
+      S.percent = null;
+      S.name = '';
+      S.tracking = true;
+      S.sawRunning = true;
+      S.lostSince = 0;
+      S.failures = 0;              // the server just reached Jellyfin
+      S.expectUntil = 0;
+      S.completeUntil = 0;
+      progressLoop.restart(0);
+    } else {
+      // Server-supplied reason, shown exactly as sent.
+      setMsg(serverSays || unreachable(res.status), 'error');
+    }
+    render();
+    // Every press is recorded server-side: started, cooldown, busy AND error.
+    historyLoop.kick(0);
+    // Whatever the answer (even a timeout, after which the scan may still have
+    // started), take the server's word for the cooldown now; an answer to a
+    // re-sync sent before the press settled is about the world before it.
+    stateLoop.restart(0);
   });
+
+  /* ---------------- Visibility ----------------
+     Nothing polls while the tab is hidden; coming back re-syncs at once. */
+
+  let lastResume = 0;
+  function resume() {
+    if (signedOut || document.hidden) return;
+    lastResume = Date.now();
+    stateLoop.kick(0);
+    progressLoop.kick(0);
+    historyLoop.kick(0);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) loops.forEach((loop) => loop.stop());
+    else resume();
+  });
+  window.addEventListener('focus', () => {
+    if (Date.now() - lastResume > 5000) resume();
+  });
+
+  render();
+  resume();
+})();
 </script>
 </body>
 </html>

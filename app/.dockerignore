@@ -1,0 +1,9 @@
+# The build context is ./app, and `COPY . .` copies all of it into the image.
+# Keep the image to what the app needs at runtime. The `**/` forms matter:
+# a bare `__pycache__` would only match the one at the top of the context.
+tests/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+Dockerfile
+.dockerignore
