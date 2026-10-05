@@ -274,8 +274,11 @@ def session_cookie(user="alice"):
 class Page:
     """A page plus a log of the API requests it made."""
 
-    def __init__(self, browser, server, size, signed_in=True, init_script=None):
-        self.context = browser.new_context(viewport={"width": size[0], "height": size[1]})
+    def __init__(self, browser, server, size, signed_in=True, init_script=None, reduced_motion=False):
+        # reduced_motion=True opens the page with prefers-reduced-motion, so the
+        # background is the static 2D field, not the animated WebGL jellyfish
+        ctx_kw = {"reduced_motion": "reduce"} if reduced_motion else {}
+        self.context = browser.new_context(viewport={"width": size[0], "height": size[1]}, **ctx_kw)
         if signed_in:
             name, value = session_cookie()
             self.context.add_cookies([{"name": name, "value": value, "url": server.url}])
@@ -478,7 +481,8 @@ def test_keyboard_press_keeps_focus_on_the_button(server, pages):
 
 
 def test_progress_502_shows_unavailable_and_backs_off(server, pages):
-    p = pages()
+    # Reduced motion keeps the jellyfish still: this test counts the console's backed-off polls, which the software-rendered WebGL field can starve.
+    p = pages(reduced_motion=True)
     page = p.open()
     expect(page.locator("#scan-btn")).to_have_attribute("aria-disabled", "false")
     page.click("#scan-btn")
@@ -565,7 +569,8 @@ def test_lost_progress_after_a_409_keeps_the_button_unavailable(server, pages):
 def test_lost_progress_guard_lapses_after_a_few_minutes(server, pages):
     # A Jellyfin that never answers again must not lock the button forever.
     server.jf.running, server.jf.percent = True, 48.0
-    p = pages()
+    # Reduced motion keeps the jellyfish still: under the fake clock the software-rendered WebGL field starves the page's timers.
+    p = pages(reduced_motion=True)
     p.page.clock.install()
     page = p.open()
     btn = page.locator("#scan-btn")
@@ -587,7 +592,8 @@ def test_one_missed_progress_read_is_not_an_outage(server, pages):
     # console to "unavailable" and back every 2 s: the status line is a live
     # region, so each flip is read out.
     server.jf.running, server.jf.percent = True, 40.0
-    p = pages(init_script=CONSOLE_FRAMES)
+    # Reduced motion keeps the jellyfish still: this test counts the console's 2 s polls, which the software-rendered WebGL field can starve.
+    p = pages(init_script=CONSOLE_FRAMES, reduced_motion=True)
     page = p.open()
     btn = page.locator("#scan-btn")
     expect(page.locator("#status-bar-pct")).to_have_text("40.0%")
@@ -706,7 +712,8 @@ def ended(status, start="2026-09-26T10:00:00.0000000Z", end="2026-09-26T10:04:30
 def test_a_watched_scan_says_how_it_ended(server, pages, status, pressed, text, kind):
     if not pressed:                                  # someone else's scan, already running
         server.jf.running, server.jf.percent = True, 40.0
-    p = pages(init_script=CONSOLE_FRAMES)
+    # Reduced motion keeps the jellyfish still: this test waits out the console's 3 s "complete" beat, which the software-rendered WebGL field can starve.
+    p = pages(init_script=CONSOLE_FRAMES, reduced_motion=True)
     page = p.open()
     btn = page.locator("#scan-btn")
     msg = page.locator("#status-msg")
@@ -766,7 +773,8 @@ def test_a_scan_over_before_the_first_poll_is_still_reported(server, pages, stat
     # changed since the press is this press's run.
     server.jf.start_on_refresh = False
     server.jf.finish_on_refresh = ended(status)
-    p = pages(init_script=CONSOLE_FRAMES)
+    # Reduced motion keeps the jellyfish still: this test counts the console's polls, which the software-rendered WebGL field can starve.
+    p = pages(init_script=CONSOLE_FRAMES, reduced_motion=True)
     with p.page.expect_response(lambda r: r.url.split("?")[0].endswith("/api/scan/progress")):
         page = p.open()                              # the result from before the press
     btn = page.locator("#scan-btn")
@@ -787,7 +795,8 @@ def test_a_scan_over_before_the_first_poll_is_still_reported(server, pages, stat
 
 def test_reload_after_finished_scan_shows_no_scanning(server, pages):
     server.seed([row(600, "started")])          # 50 minutes of cooldown left, Jellyfin idle
-    p = pages(init_script="""
+    # Reduced motion keeps the jellyfish still: this test waits out the console's polls, which the software-rendered WebGL field can starve.
+    p = pages(reduced_motion=True, init_script="""
         window.__bar = [];
         new MutationObserver(() => {
           const w = document.getElementById('status-bar-wrap');
@@ -807,7 +816,8 @@ def test_reload_after_finished_scan_shows_no_scanning(server, pages):
 def test_cooldown_end_while_a_scan_still_runs_keeps_tracking(server, pages):
     server.seed([row(3600 - 3, "started")])     # cooldown ends in ~3 s
     server.jf.running, server.jf.percent = True, 64.0
-    p = pages()
+    # Reduced motion keeps the jellyfish still: this test times the countdown's end, which the software-rendered WebGL field can starve.
+    p = pages(reduced_motion=True)
     page = p.open()
     expect(page.locator("#status-bar-pct")).to_have_text("64.0%")
     expect(page.locator("#sr-announce")).to_have_text(
@@ -862,10 +872,11 @@ def test_proxy_error_page_gives_a_friendly_message(server, pages):
 
 def test_hidden_tab_stops_polling(server, pages):
     server.jf.running, server.jf.percent = True, 30.0
+    # Reduced motion keeps the jellyfish still: this test counts the console's polls, which the software-rendered WebGL field can starve.
     p = pages(init_script="""
         window.__hidden = false;
         Object.defineProperty(document, 'hidden', { get: () => window.__hidden });
-    """)
+    """, reduced_motion=True)
     page = p.open()
     expect(page.locator("#status-bar-pct")).to_have_text("30.0%")
     page.evaluate("window.__hidden = true; document.dispatchEvent(new Event('visibilitychange'))")
@@ -881,7 +892,8 @@ def test_hidden_tab_stops_polling(server, pages):
 
 def test_429_after_an_ended_cooldown_paints_the_real_time(server, pages):
     server.seed([row(3600 - 2, "started")])            # this page's cooldown ends in ~2 s
-    p = pages(init_script=TIMER_FRAMES)
+    # Reduced motion keeps the jellyfish still: this test times the countdown's beats, which the software-rendered WebGL field can starve.
+    p = pages(init_script=TIMER_FRAMES, reduced_motion=True)
     page = p.open()
     expect(page.locator("#scan-btn")).to_have_attribute("aria-disabled", "false", timeout=8000)
     page.wait_for_timeout(1500)                        # the 00:00 beat has hidden again
@@ -900,7 +912,8 @@ def test_the_cooldown_announcement_is_said_once_then_cleared(server, pages):
     # Left in place, the live region would still say "about 41 minutes" half
     # an hour later, right next to #scan-when's current value.
     server.seed([row(20 * 60 - 5, "started")])        # 40 min 5 s of cooldown left
-    p = pages()
+    # Reduced motion keeps the jellyfish still: under the fake clock the software-rendered WebGL field starves the page's timers.
+    p = pages(reduced_motion=True)
     p.page.clock.install()
     page = p.open()
     sr = page.locator("#sr-announce")
@@ -948,7 +961,8 @@ def test_another_users_press_shows_up_when_the_tab_comes_back(server, pages):
 def test_slow_jellyfin_never_gets_overlapping_progress_polls(server, pages):
     server.jf.running, server.jf.percent = True, 50.0
     server.jf.tasks_delay = 3.0
-    p = pages()
+    # Reduced motion keeps the jellyfish still: this test counts the console's polls, which the software-rendered WebGL field can starve.
+    p = pages(reduced_motion=True)
     page = p.open()
     expect(page.locator("#status-bar-pct")).to_have_text("50.0%", timeout=8000)
     page.wait_for_timeout(9000)
@@ -959,7 +973,8 @@ def test_slow_jellyfin_never_gets_overlapping_progress_polls(server, pages):
 
 def test_relative_times_refresh_while_the_page_stays_open(server, pages):
     server.seed([row(5, "cooldown")])
-    p = pages()
+    # Reduced motion keeps the jellyfish still: under the fake clock the software-rendered WebGL field starves the page's timers.
+    p = pages(reduced_motion=True)
     p.page.clock.install()
     page = p.open()
     rel = page.locator(".history-rel").first
@@ -973,11 +988,12 @@ def test_lockout_countdown_follows_the_wall_clock(server, pages):
     server.jf.auth_status = 401
     # A wall clock the test can move without running any timers (what a
     # sleeping laptop or a throttled background tab looks like to the page).
+    # Reduced motion keeps the jellyfish still: this test times the countdown's ticks, which the software-rendered WebGL field can starve.
     p = pages(signed_in=False, init_script="""
         const realNow = Date.now.bind(Date);
         window.__skew = 0;
         Date.now = () => realNow() + window.__skew;
-    """)
+    """, reduced_motion=True)
     page = p.open("/login")
     for _ in range(3):
         page.fill("#username", "alice")

@@ -286,3 +286,16 @@ def test_inline_scripts_are_valid_javascript(path, tmp_path):
         target.write_text(source, encoding="utf-8")
         run = subprocess.run(["node", "--check", str(target)], capture_output=True, text=True)
         assert run.returncode == 0, run.stderr
+
+
+def test_hd_engine_scripts_load_before_the_selector():
+    # the engine registers window.JellyfieldHD and the one species registers
+    # into it as it loads (it is a no-op without the engine), both before the
+    # selector that the page's mount call goes through
+    for path in (TEMPLATE, LOGIN):
+        text = path.read_text(encoding="utf-8")
+        hd = text.index("filename='jellyfield-hd.js'")
+        striped = text.index("filename='jellyfield-species-striped.js'")
+        sel = text.index("filename='jellyfield.js'")
+        assert hd < striped < sel
+        assert text.count("filename='jellyfield-species-") == 1   # one species: the bake-off's loser is gone

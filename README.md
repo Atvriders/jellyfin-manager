@@ -290,6 +290,12 @@ Chrome/Chromium (set `CHROME_PATH` if it isn't `/usr/bin/google-chrome` or
 `FRONTEND_SHOTS=/some/dir` / `INCOMING_SHOTS=/some/dir` to save screenshots of
 each state.
 
+The HD jellyfish browser tests live in `app/tests/test_jellyfield_hd_e2e.py`
+and need playwright, `numpy` and `Pillow` (and the same browser); without any
+of them they are skipped. Set `JELLY_SHOTS=/some/dir` to save a PNG of the page
+at their key frames (the default view, each tier, the LDR water, the creature
+on desktop and phone) for inspection.
+
 CI runs the suite (and `node --check` on the static scripts and the templates'
 inline scripts) on every push and pull request. The browser tests are skipped
 there. Only pushes to `master`, releases and a weekly rebuild publish an
@@ -302,3 +308,11 @@ Every image is also tagged with its commit SHA, so you can roll back to one.
 - **Backend:** Python 3.12, Flask, served by gunicorn (one worker: the scan lock, cooldown and login throttle live in that process)
 - **Frontend:** Vanilla JS (no build step)
 - **Container:** Docker / Docker Compose, image published to GitHub Container Registry
+
+The background jellyfish is a WebGL2 HDR engine (`app/static/jellyfield-hd.js`,
+with its one creature, the purple-striped jelly, in
+`jellyfield-species-striped.js`), sharp at any pixel density up to 4K. It picks
+a quality tier (Ultra, High or Low) from the screen and device, then steps it
+down or up with the measured frame time. Without WebGL2, under reduced motion,
+or after a lost GPU context that never comes back, the page falls back to the
+lightweight Canvas-2D field in `jellyfield.js`.
